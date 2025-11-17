@@ -104,7 +104,8 @@ export default class BrowserFunc {
             }
 
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GO-HOME', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'GO-HOME', 'An error occurred:' + error, 'error')
+            throw new Error('An error occurred:' + error)
         }
     }
 
@@ -148,7 +149,8 @@ export default class BrowserFunc {
             })
 
             if (!scriptContent) {
-                throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard data not found within script', 'error')
+                this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard data not found within script', 'error')
+                throw new Error('Dashboard data not found within script')
             }
 
             // Extract the dashboard object from the script content
@@ -164,14 +166,16 @@ export default class BrowserFunc {
             }, scriptContent)
 
             if (!dashboardData) {
-                throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Unable to parse dashboard script', 'error')
+                this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Unable to parse dashboard script', 'error')
+                throw new Error('Unable to parse dashboard script')
             }
 
             this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Successfully fetched dashboard data')
             return dashboardData
 
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Error fetching dashboard data: ${error}`, 'error')
+            this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Error fetching dashboard data: ${error}`, 'error')
+            throw new Error(`Error fetching dashboard data: ${error}`)
         }
 
     }
@@ -232,7 +236,8 @@ export default class BrowserFunc {
                 totalEarnablePoints
             }
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GET-BROWSER-EARNABLE-POINTS', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'GET-BROWSER-EARNABLE-POINTS', 'An error occurred:' + error, 'error')
+            throw new Error('An error occurred:' + error)
         }
     }
 
@@ -289,7 +294,8 @@ export default class BrowserFunc {
 
             return points
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GET-APP-EARNABLE-POINTS', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'GET-APP-EARNABLE-POINTS', 'An error occurred:' + error, 'error')
+            throw new Error('An error occurred:' + error)
         }
     }
 
@@ -303,7 +309,8 @@ export default class BrowserFunc {
 
             return data.userStatus.availablePoints
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GET-CURRENT-POINTS', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'GET-CURRENT-POINTS', 'An error occurred:' + error, 'error')
+            throw new Error('An error occurred:' + error)
         }
     }
 
@@ -660,7 +667,8 @@ export default class BrowserFunc {
             await browser.close()
             this.bot.log(this.bot.isMobile, 'CLOSE-BROWSER-LEGACY', 'Browser context closed (legacy mode - browser instance may still be running!)', 'warn')
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'CLOSE-BROWSER-LEGACY', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'CLOSE-BROWSER-LEGACY', 'An error occurred:' + error, 'error')
+            throw new Error('An error occurred:' + error)
         }
     }
 }

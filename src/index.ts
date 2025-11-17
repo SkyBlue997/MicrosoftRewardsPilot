@@ -161,11 +161,12 @@ export class MicrosoftRewardsBot {
                     log('main', 'MAIN-WORKER', `Next account will start at: ${new Date(Date.now() + delayMs).toLocaleTimeString()}`)
                     
                     // 显示倒计时 - 每5分钟显示一次，避免频繁刷屏
+                    const startTime = Date.now()
                     let lastDisplayTime = 0
                     const countdownInterval = setInterval(() => {
-                        const remaining = delayMs - (Date.now() - startTime)
                         const currentTime = Date.now()
-                        
+                        const remaining = delayMs - (currentTime - startTime)
+
                         if (remaining > 0) {
                             // 每5分钟显示一次，或者是第一次显示
                             if (currentTime - lastDisplayTime >= 300000 || lastDisplayTime === 0) {
@@ -174,8 +175,6 @@ export class MicrosoftRewardsBot {
                             }
                         }
                     }, 60000)  // 每1分钟检查一次，但只在满足条件时显示
-                    
-                    const startTime = Date.now()
                     await this.utils.wait(delayMs)
                     clearInterval(countdownInterval)
                     console.log('\n')  // 换行

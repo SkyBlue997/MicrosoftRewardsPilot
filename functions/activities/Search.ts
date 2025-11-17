@@ -1,16 +1,16 @@
-import { Page } from 'rebrowser-playwright'
-import { platform } from 'os'
+import {Page} from 'rebrowser-playwright'
+import {platform} from 'os'
 
-import { Workers } from '../Workers'
-import { IntelligentDelaySystem } from '../../src/anti-detection/intelligent-delay'
-import { ContextualSearchGenerator } from '../../src/anti-detection/contextual-search'
-import { HumanBehaviorSimulator } from '../../src/anti-detection/human-behavior'
-import { SessionManager } from '../../src/anti-detection/session-manager'
-import { NextGenAntiDetectionController } from '../../src/anti-detection/next-gen-controller'
+import {Workers} from '../Workers'
+import {IntelligentDelaySystem} from '../../src/anti-detection/intelligent-delay'
+import {ContextualSearchGenerator} from '../../src/anti-detection/contextual-search'
+import {HumanBehaviorSimulator} from '../../src/anti-detection/human-behavior'
+import {SessionManager} from '../../src/anti-detection/session-manager'
+import {NextGenAntiDetectionController} from '../../src/anti-detection/next-gen-controller'
 
-import { Counters, DashboardData } from '../../interfaces/DashboardData'
-import { GoogleSearch } from '../../interfaces/Search'
-import { AxiosRequestConfig } from 'axios'
+import {Counters, DashboardData} from '../../interfaces/DashboardData'
+import {GoogleSearch} from '../../interfaces/Search'
+import {AxiosRequestConfig} from 'axios'
 
 // 扩展 Window 和 Navigator 接口以支持非标准属性
 declare global {
@@ -18,6 +18,7 @@ declare global {
         gc?: () => void
         ontouchstart?: (() => void) | null
     }
+
     interface Navigator {
         deviceMemory?: number
     }
@@ -72,9 +73,13 @@ interface UserProfile {
 
 interface UltraAntiDetectionScheduler {
     generateUserProfile(): UserProfile
+
     isOptimalActivityTime(): boolean
+
     simulateSessionInterruption(page: Page): Promise<void>
+
     simulateMultitasking(page: Page, taskName: string): Promise<void>
+
     simulateTabBrowsing(page: Page): Promise<void>
 }
 
@@ -117,13 +122,13 @@ export class Search extends Workers {
         if (this.bot.isMobile) {
             const mobileSearchData = searchCounters.mobileSearch?.[0]
             if (mobileSearchData) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-INITIAL-STATUS', 
+                this.bot.log(this.bot.isMobile, 'SEARCH-INITIAL-STATUS',
                     `Mobile search initial status: ${mobileSearchData.pointProgress}/${mobileSearchData.pointProgressMax} points`)
             }
         } else {
             const pcSearchData = searchCounters.pcSearch?.[0]
             const edgeSearchData = searchCounters.pcSearch?.[1]
-            this.bot.log(this.bot.isMobile, 'SEARCH-INITIAL-STATUS', 
+            this.bot.log(this.bot.isMobile, 'SEARCH-INITIAL-STATUS',
                 `Desktop search initial status: PC(${pcSearchData?.pointProgress || 0}/${pcSearchData?.pointProgressMax || 0}), Edge(${edgeSearchData?.pointProgress || 0}/${edgeSearchData?.pointProgressMax || 0})`)
         }
 
@@ -138,7 +143,7 @@ export class Search extends Workers {
 
         // 去重搜索词
         allSearchQueries = Array.from(new Set(allSearchQueries))
-        
+
         this.bot.log(this.bot.isMobile, 'SEARCH-QUERY-SOURCE', `Generated ${allSearchQueries.length} diversified search queries`)
 
         // Go to bing
@@ -160,11 +165,11 @@ export class Search extends Workers {
 
         const queries: string[] = []
         // Mobile search doesn't seem to like related queries?
-        allSearchQueries.forEach(x => { 
+        allSearchQueries.forEach(x => {
             if (typeof x === 'string') {
                 queries.push(x)
             } else {
-                this.bot.isMobile ? queries.push(x.topic) : queries.push(x.topic, ...x.related) 
+                this.bot.isMobile ? queries.push(x.topic) : queries.push(x.topic, ...x.related)
             }
         })
 
@@ -175,27 +180,27 @@ export class Search extends Workers {
         let completedSearches = 0
         let earnedPoints = 0
         const lastPointsCheck = missingPoints
-        
+
         this.bot.log(this.bot.isMobile, 'SEARCH-PROGRESS', `Starting ${this.bot.isMobile ? 'mobile' : 'desktop'} search: ${missingPoints} points needed, ${totalQueries} queries available`)
-        
+
         let lastSuccessfulQuery: string | null = null
         let contextSearchCount = 0
-        
+
         for (let i = 0; i < queries.length; i++) {
             // 检查总体超时
             if (Date.now() - searchStartTime > searchTimeoutMs) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Search process timeout after 20 minutes, stopping searches', 'warn')
                 break
             }
-            
+
             let query = queries[i] as string
-            
+
             // 如果应该使用上下文搜索，并且有上一个成功的查询
             if (this.shouldUseContextualSearch() && lastSuccessfulQuery && contextSearchCount < 3) {
-                const contextQueries = this.generateContextualSearches(lastSuccessfulQuery, 
-                    data.userProfile?.attributes?.country === 'JP' ? 'ja' : 
-                    data.userProfile?.attributes?.country === 'CN' ? 'zh' : 'en')
-                
+                const contextQueries = this.generateContextualSearches(lastSuccessfulQuery,
+                    data.userProfile?.attributes?.country === 'JP' ? 'ja' :
+                        data.userProfile?.attributes?.country === 'CN' ? 'zh' : 'en')
+
                 if (contextQueries.length > 0) {
                     const contextQuery = contextQueries[0]
                     if (contextQuery) {
@@ -220,28 +225,28 @@ export class Search extends Workers {
             if (pointsGained > 0) {
                 earnedPoints += pointsGained
                 this.bot.log(this.bot.isMobile, 'SEARCH-PROGRESS', `Earned ${pointsGained} points (Total: ${earnedPoints} points)`)
-                
+
                 // 记录详细的积分变化
                 if (this.bot.isMobile) {
                     const mobileSearchData = searchCounters.mobileSearch?.[0]
                     if (mobileSearchData) {
-                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL', 
+                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL',
                             `Mobile search progress: ${mobileSearchData.pointProgress}/${mobileSearchData.pointProgressMax} points`)
                     }
                 } else {
                     // 桌面端详细积分跟踪
                     const pcSearchData = searchCounters.pcSearch?.[0]
                     const edgeSearchData = searchCounters.pcSearch?.[1]
-                    
+
                     if (pcSearchData) {
                         const pcRemaining = pcSearchData.pointProgressMax - pcSearchData.pointProgress
-                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL', 
+                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL',
                             `PC search progress: ${pcSearchData.pointProgress}/${pcSearchData.pointProgressMax} points (${pcRemaining} remaining)`)
                     }
-                    
+
                     if (edgeSearchData) {
                         const edgeRemaining = edgeSearchData.pointProgressMax - edgeSearchData.pointProgress
-                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL', 
+                        this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-DETAIL',
                             `Edge search progress: ${edgeSearchData.pointProgress}/${edgeSearchData.pointProgressMax} points (${edgeRemaining} remaining)`)
                     }
                 }
@@ -252,13 +257,13 @@ export class Search extends Workers {
                 maxLoop++ // Add to max loop
                 if (maxLoop === 3) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-WARNING', `No points gained for ${maxLoop} searches, may need to wait longer between searches`)
-                    
+
                     // 强制检查积分状态
                     this.bot.log(this.bot.isMobile, 'SEARCH-FORCE-CHECK', 'Force checking current search points status...')
                     try {
                         const forceCheckCounters = await this.bot.browser.func.getSearchPoints()
                         const forceCheckMissingPoints = this.calculatePoints(forceCheckCounters)
-                        
+
                         if (forceCheckMissingPoints !== missingPoints) {
                             this.bot.log(this.bot.isMobile, 'SEARCH-FORCE-CHECK', `Points updated after force check: ${missingPoints} -> ${forceCheckMissingPoints}`)
                             missingPoints = forceCheckMissingPoints
@@ -269,12 +274,12 @@ export class Search extends Workers {
                         this.bot.log(this.bot.isMobile, 'SEARCH-FORCE-CHECK', `Force check failed: ${checkError}`, 'warn')
                     }
                 }
-                
+
                 if (maxLoop === 5) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-WARNING', `No points gained for ${maxLoop} searches, adding extra delay`)
                     await this.bot.utils.wait(30000) // 额外等待30秒
                 }
-                
+
                 // 桌面端特殊处理：延长重试次数
                 if (!this.bot.isMobile && maxLoop === 8) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-DESKTOP-EXTENDED', 'Desktop search needs more time, extending retry limit', 'warn')
@@ -290,12 +295,12 @@ export class Search extends Workers {
 
             if (missingPoints === 0) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-COMPLETE', `✅ Search completed! Total earned: ${earnedPoints} points`)
-                
+
                 // 最终验证积分状态
                 await this.bot.utils.wait(2000)
                 const finalCounters = await this.bot.browser.func.getSearchPoints()
                 const finalMissingPoints = this.calculatePoints(finalCounters)
-                
+
                 if (finalMissingPoints === 0) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-VERIFY', '✅ Final verification: All search points earned successfully!')
                 } else {
@@ -316,51 +321,51 @@ export class Search extends Workers {
             // Only for mobile searches
             if (maxLoop > 5 && this.bot.isMobile) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Search didn\'t gain point for 5 iterations, likely bad User-Agent', 'warn')
-                
+
                 // 尝试重新生成 User-Agent
                 try {
                     this.bot.log(this.bot.isMobile, 'SEARCH-UA-REFRESH', 'Attempting to refresh User-Agent...', 'warn')
-                    
+
                     // 获取新的 User-Agent
-                    const { getUserAgent } = await import('../../utils/UserAgent')
+                    const {getUserAgent} = await import('../../utils/UserAgent')
                     const newUserAgent = await getUserAgent(this.bot.isMobile)
-                    
+
                     // 更新浏览器的 User-Agent
                     await page.setExtraHTTPHeaders({
                         'User-Agent': newUserAgent.userAgent
                     })
-                    
+
                     this.bot.log(this.bot.isMobile, 'SEARCH-UA-REFRESH', `Updated User-Agent: ${newUserAgent.userAgent}`)
-                    
+
                     // 等待较短时间后继续
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Waiting 30 seconds before continuing with new User-Agent...', 'warn')
                     await this.bot.utils.wait(30000) // 等待30秒
-                    
+
                 } catch (error) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-UA-REFRESH', `Failed to refresh User-Agent: ${error}`, 'error')
                     // 如果更新失败，等待3分钟
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Waiting 3 minutes before continuing mobile search...', 'warn')
                     await this.bot.utils.wait(180000) // 等待3分钟
                 }
-                
+
                 maxLoop = 0 // 重置计数器
                 continue // 继续搜索而不是break
             }
 
             // 桌面端和移动端使用不同的maxLoop限制
             const maxLoopLimit = this.bot.isMobile ? 10 : 15 // 桌面端允许更多重试
-            
+
             // If we didn't gain points for multiple iterations, assume it's stuck
             if (maxLoop > maxLoopLimit) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Search didn't gain point for ${maxLoopLimit} iterations aborting searches`, 'warn')
-                
+
                 // 在放弃前做最后一次积分检查
                 this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-CHECK', 'Performing final points check before giving up...')
                 try {
                     await this.bot.utils.wait(5000) // 等待5秒让系统更新
                     const finalCheckCounters = await this.bot.browser.func.getSearchPoints()
                     const finalCheckMissingPoints = this.calculatePoints(finalCheckCounters)
-                    
+
                     if (finalCheckMissingPoints < missingPoints) {
                         this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-CHECK', `Points updated in final check: ${missingPoints} -> ${finalCheckMissingPoints}`)
                         missingPoints = finalCheckMissingPoints
@@ -372,7 +377,7 @@ export class Search extends Workers {
                 } catch (finalCheckError) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-CHECK', `Final check failed: ${finalCheckError}`, 'warn')
                 }
-                
+
                 maxLoop = 0 // Reset to 0 so we can retry with related searches below
                 break
             }
@@ -384,7 +389,7 @@ export class Search extends Workers {
             // 移动端特殊检测：检查是否需要User-Agent刷新
             if (this.bot.isMobile && maxLoop === 3) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-MOBILE-CHECK', 'Mobile search stalled, checking device compatibility...')
-                
+
                 // 检查当前页面的移动端特征
                 try {
                     const mobileFeatures = await page.evaluate(() => {
@@ -397,10 +402,10 @@ export class Search extends Workers {
                             devicePixelRatio: window.devicePixelRatio
                         }
                     })
-                    
-                    this.bot.log(this.bot.isMobile, 'SEARCH-MOBILE-FEATURES', 
+
+                    this.bot.log(this.bot.isMobile, 'SEARCH-MOBILE-FEATURES',
                         `Mobile features: UA=${mobileFeatures.isMobile}, Touch=${mobileFeatures.touchPoints}, Screen=${mobileFeatures.screenWidth}x${mobileFeatures.innerWidth}, DPR=${mobileFeatures.devicePixelRatio}`)
-                        
+
                     // 如果移动端特征不完整，可能需要刷新User-Agent
                     if (!mobileFeatures.isMobile || mobileFeatures.touchPoints === 0 || mobileFeatures.screenWidth > 500) {
                         this.bot.log(this.bot.isMobile, 'SEARCH-MOBILE-UA-REFRESH', 'Mobile features incomplete, will refresh User-Agent on next retry', 'warn')
@@ -427,7 +432,7 @@ export class Search extends Workers {
                     const additionalQueries = await this.generateAdditionalQueries()
                     allSearchQueries.push(...additionalQueries)
                 }
-                
+
                 const query = allSearchQueries[i++] as GoogleSearch | string
 
                 // Get related search terms to the search queries
@@ -436,7 +441,7 @@ export class Search extends Workers {
                     // Search for the first 2 related terms
                     for (const term of relatedTerms.slice(1, 3)) {
                         if (extraSearchCount >= maxExtraSearches) break
-                        
+
                         this.bot.log(this.bot.isMobile, 'SEARCH-BING-EXTRA', `${missingPoints} Points Remaining | Extra Query ${extraSearchCount + 1}/${maxExtraSearches}: ${term}`)
 
                         searchCounters = await this.bingSearch(page, term)
@@ -465,10 +470,10 @@ export class Search extends Workers {
                         }
                     }
                 }
-                
+
                 if (missingPoints === 0) break
             }
-            
+
             if (missingPoints > 0) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-INCOMPLETE', `Search ended with ${missingPoints} points still needed after ${extraSearchCount} extra searches`, 'warn')
                 // 显示详细的剩余积分信息
@@ -476,16 +481,16 @@ export class Search extends Workers {
                     const finalCounters = await this.bot.browser.func.getSearchPoints()
                     const pcSearchData = finalCounters.pcSearch?.[0]
                     const edgeSearchData = finalCounters.pcSearch?.[1]
-                    
+
                     if (pcSearchData) {
                         const pcRemaining = pcSearchData.pointProgressMax - pcSearchData.pointProgress
-                        this.bot.log(this.bot.isMobile, 'SEARCH-INCOMPLETE-DETAIL', 
+                        this.bot.log(this.bot.isMobile, 'SEARCH-INCOMPLETE-DETAIL',
                             `PC search final: ${pcSearchData.pointProgress}/${pcSearchData.pointProgressMax} (${pcRemaining} remaining)`)
                     }
-                    
+
                     if (edgeSearchData) {
                         const edgeRemaining = edgeSearchData.pointProgressMax - edgeSearchData.pointProgress
-                        this.bot.log(this.bot.isMobile, 'SEARCH-INCOMPLETE-DETAIL', 
+                        this.bot.log(this.bot.isMobile, 'SEARCH-INCOMPLETE-DETAIL',
                             `Edge search final: ${edgeSearchData.pointProgress}/${edgeSearchData.pointProgressMax} (${edgeRemaining} remaining)`)
                     }
                 }
@@ -515,41 +520,41 @@ export class Search extends Workers {
             const japaneseQuery = this.contextualSearch.generateJapaneseLocalizedSearch()
             allQueries.push(japaneseQuery)
         }
-        
+
         try {
             // 获取地理位置和语言信息
             const geoLocation = await this.getGeoLocationWithFallback(data)
             const languageConfig = await this.getLanguageConfigFromGeo(geoLocation)
-            
-            this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 
+
+            this.bot.log(this.bot.isMobile, 'SEARCH-GEO',
                 `Location: ${geoLocation.country} (${geoLocation.countryCode}) | Language: ${languageConfig.name} (${languageConfig.code})`)
-            
+
             // 1. Google Trends查询（40%）- 使用地理位置相关的趋势
             const trendsQueries = await this.getGeoLocalizedTrends(languageConfig.googleTrendsLocale)
             const trendsCount = Math.floor(trendsQueries.length * 0.4)
             allQueries.push(...trendsQueries.slice(0, trendsCount))
-            
+
             // 2. 时事相关查询（25%）- 使用本地语言
             const newsQueries = await this.generateLocalizedNewsQueries(languageConfig)
             allQueries.push(...newsQueries)
-            
+
             // 3. 常见搜索查询（20%）- 使用本地语言
             const commonQueries = this.generateLocalizedCommonQueries(languageConfig)
             allQueries.push(...commonQueries)
-            
+
             // 4. 技术和娱乐查询（15%）- 使用本地语言
             const techEntertainmentQueries = this.generateLocalizedTechEntertainmentQueries(languageConfig)
             allQueries.push(...techEntertainmentQueries)
-            
-            this.bot.log(this.bot.isMobile, 'SEARCH-MULTILANG', 
+
+            this.bot.log(this.bot.isMobile, 'SEARCH-MULTILANG',
                 `Generated queries: Trends(${trendsCount}), News(${newsQueries.length}), Common(${commonQueries.length}), Tech/Entertainment(${techEntertainmentQueries.length}) in ${languageConfig.name}`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-GEO-ERROR', `Error generating localized queries: ${error}`, 'warn')
             // 如果地理语言检测失败，回退到原有的多样化方案
             return await this.generateFallbackDiversifiedQueries(data)
         }
-        
+
         return allQueries
     }
 
@@ -560,26 +565,26 @@ export class Search extends Workers {
         try {
             // 优先级1: 尝试通过IP地址检测地理位置
             this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 'Attempting IP-based location detection...', 'log')
-            const { GeoLanguageDetector } = await import('../../utils/GeoLanguage')
+            const {GeoLanguageDetector} = await import('../../utils/GeoLanguage')
             const ipLocation = await GeoLanguageDetector.getCurrentLocation()
-            
+
             // 如果IP检测成功且不是未知位置
             if (ipLocation && ipLocation.country !== 'Unknown' && ipLocation.ip !== 'Unknown') {
-                this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 
+                this.bot.log(this.bot.isMobile, 'SEARCH-GEO',
                     `IP detection successful: ${ipLocation.country} (${ipLocation.countryCode}) - Language: ${ipLocation.language}`)
                 return ipLocation
             }
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 'IP-based location detection failed', 'warn')
         }
-        
+
         // 优先级2: 使用账户资料中的国家信息
         try {
             const profileCountry = data.userProfile?.attributes?.country
             if (profileCountry) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 
+                this.bot.log(this.bot.isMobile, 'SEARCH-GEO',
                     `Using account profile country: ${profileCountry}`, 'log')
-                
+
                 // 根据国家代码映射语言
                 const countryLanguageMap: Record<string, string> = {
                     'JP': 'ja', 'CN': 'zh-CN', 'KR': 'ko', 'VN': 'vi',
@@ -590,9 +595,9 @@ export class Search extends Workers {
                     'TH': 'th', 'ID': 'id', 'MY': 'ms', 'PH': 'en',
                     'TW': 'zh-TW', 'HK': 'zh-HK', 'SG': 'en', 'NZ': 'en'
                 }
-                
+
                 const inferredLanguage = countryLanguageMap[profileCountry] || 'en'
-                
+
                 return {
                     country: profileCountry,
                     countryCode: profileCountry,
@@ -606,31 +611,31 @@ export class Search extends Workers {
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 'Failed to use profile country', 'warn')
         }
-        
+
         // 优先级3: 使用时区推测（最后的备用方案）
-        this.bot.log(this.bot.isMobile, 'SEARCH-GEO', 
+        this.bot.log(this.bot.isMobile, 'SEARCH-GEO',
             'Falling back to timezone-based location detection', 'warn')
-        
+
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
         const timezoneMap: Record<string, { country: string, code: string, language: string }> = {
-            'Asia/Tokyo': { country: 'Japan', code: 'JP', language: 'ja' },
-            'Asia/Shanghai': { country: 'China', code: 'CN', language: 'zh-CN' },
-            'Asia/Seoul': { country: 'South Korea', code: 'KR', language: 'ko' },
-            'Asia/Ho_Chi_Minh': { country: 'Vietnam', code: 'VN', language: 'vi' },
-            'Asia/Bangkok': { country: 'Thailand', code: 'TH', language: 'th' },
-            'Europe/London': { country: 'United Kingdom', code: 'GB', language: 'en' },
-            'Europe/Paris': { country: 'France', code: 'FR', language: 'fr' },
-            'Europe/Berlin': { country: 'Germany', code: 'DE', language: 'de' },
-            'America/New_York': { country: 'United States', code: 'US', language: 'en' },
-            'America/Los_Angeles': { country: 'United States', code: 'US', language: 'en' },
-            'Australia/Sydney': { country: 'Australia', code: 'AU', language: 'en' }
+            'Asia/Tokyo': {country: 'Japan', code: 'JP', language: 'ja'},
+            'Asia/Shanghai': {country: 'China', code: 'CN', language: 'zh-CN'},
+            'Asia/Seoul': {country: 'South Korea', code: 'KR', language: 'ko'},
+            'Asia/Ho_Chi_Minh': {country: 'Vietnam', code: 'VN', language: 'vi'},
+            'Asia/Bangkok': {country: 'Thailand', code: 'TH', language: 'th'},
+            'Europe/London': {country: 'United Kingdom', code: 'GB', language: 'en'},
+            'Europe/Paris': {country: 'France', code: 'FR', language: 'fr'},
+            'Europe/Berlin': {country: 'Germany', code: 'DE', language: 'de'},
+            'America/New_York': {country: 'United States', code: 'US', language: 'en'},
+            'America/Los_Angeles': {country: 'United States', code: 'US', language: 'en'},
+            'Australia/Sydney': {country: 'Australia', code: 'AU', language: 'en'}
         }
-        
-        const location = timezoneMap[timezone] || { country: 'United States', code: 'US', language: 'en' }
-        
-        this.bot.log(this.bot.isMobile, 'SEARCH-GEO-TIMEZONE', 
+
+        const location = timezoneMap[timezone] || {country: 'United States', code: 'US', language: 'en'}
+
+        this.bot.log(this.bot.isMobile, 'SEARCH-GEO-TIMEZONE',
             `Using timezone ${timezone}: ${location.country} (${location.code}) with language: ${location.language}`)
-        
+
         return {
             country: location.country,
             countryCode: location.code,
@@ -647,7 +652,7 @@ export class Search extends Workers {
      */
     private async getLanguageConfigFromGeo(geoLocation: GeoLocation): Promise<LanguageConfig> {
         try {
-            const { GeoLanguageDetector } = await import('../../utils/GeoLanguage')
+            const {GeoLanguageDetector} = await import('../../utils/GeoLanguage')
             return GeoLanguageDetector.getLanguageConfig(geoLocation.language)
         } catch (error) {
             // 备用方案：返回日文配置
@@ -686,14 +691,14 @@ export class Search extends Workers {
      */
     private async generateLocalizedNewsQueries(languageConfig: LanguageConfig): Promise<string[]> {
         try {
-            const { GeoLanguageDetector } = await import('../../utils/GeoLanguage')
+            const {GeoLanguageDetector} = await import('../../utils/GeoLanguage')
             const timeBasedQueries = GeoLanguageDetector.generateTimeBasedQueries(languageConfig.code)
-            
+
             const newsQueries = languageConfig.searchQueries.news || []
-            
+
             // 合并时效性查询和常规新闻查询
             const combinedQueries = [...timeBasedQueries, ...newsQueries]
-            
+
             // 随机选择4-6个查询
             const selectedCount = 4 + Math.floor(Math.random() * 3)
             return this.bot.utils.shuffleArray(combinedQueries).slice(0, selectedCount) as string[]
@@ -716,10 +721,10 @@ export class Search extends Workers {
     private generateLocalizedCommonQueries(languageConfig: LanguageConfig): string[] {
         const commonQueries = languageConfig.searchQueries.common || []
         const foodQueries = languageConfig.searchQueries.food || []
-        
+
         // 合并常见查询和美食查询
         const combinedQueries = [...commonQueries, ...foodQueries]
-        
+
         // 随机选择3-5个查询
         const selectedCount = 3 + Math.floor(Math.random() * 3)
         return this.bot.utils.shuffleArray(combinedQueries).slice(0, selectedCount) as string[]
@@ -732,12 +737,12 @@ export class Search extends Workers {
         const techQueries: string[] = languageConfig.searchQueries.tech || []
         const entertainmentQueries: string[] = languageConfig.searchQueries.entertainment || []
         const sportsQueries: string[] = languageConfig.searchQueries.sports || []
-        
+
         // 从每个类别选择1-2个查询
         const selectedTech: string[] = this.bot.utils.shuffleArray(techQueries).slice(0, 1 + Math.floor(Math.random() * 2)) as string[]
         const selectedEntertainment: string[] = this.bot.utils.shuffleArray(entertainmentQueries).slice(0, 1 + Math.floor(Math.random() * 2)) as string[]
         const selectedSports: string[] = this.bot.utils.shuffleArray(sportsQueries).slice(0, 1 + Math.floor(Math.random() * 2)) as string[]
-        
+
         return [...selectedTech, ...selectedEntertainment, ...selectedSports]
     }
 
@@ -746,40 +751,40 @@ export class Search extends Workers {
      */
     private async generateFallbackDiversifiedQueries(data: DashboardData): Promise<(GoogleSearch | string)[]> {
         const allQueries: (GoogleSearch | string)[] = []
-        
+
         try {
             // 1. Google Trends查询（50%）
             const trendsQueries = await this.getGoogleTrends(
-                this.bot.config.searchSettings.useGeoLocaleQueries ? 
-                data.userProfile.attributes.country : 'JP'
+                this.bot.config.searchSettings.useGeoLocaleQueries ?
+                    data.userProfile.attributes.country : 'JP'
             )
             const trendsCount = Math.floor(trendsQueries.length * 0.5)
             allQueries.push(...trendsQueries.slice(0, trendsCount))
-            
+
             // 2. 时事相关查询（20%）
             const newsQueries = await this.generateNewsQueries()
             allQueries.push(...newsQueries)
-            
+
             // 3. 常见搜索查询（15%）
             const commonQueries = this.generateCommonQueries()
             allQueries.push(...commonQueries)
-            
+
             // 4. 随机话题查询（15%）
             const randomQueries = await this.generateRandomTopicQueries()
             allQueries.push(...randomQueries)
-            
-            this.bot.log(this.bot.isMobile, 'SEARCH-FALLBACK', 
+
+            this.bot.log(this.bot.isMobile, 'SEARCH-FALLBACK',
                 `Fallback query sources: Trends(${trendsCount}), News(${newsQueries.length}), Common(${commonQueries.length}), Random(${randomQueries.length})`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-FALLBACK-ERROR', `Error generating fallback queries: ${error}`, 'warn')
             // 最后的备用方案：返回原有的Google Trends
             return await this.getGoogleTrends(
-                this.bot.config.searchSettings.useGeoLocaleQueries ? 
-                data.userProfile.attributes.country : 'JP'
+                this.bot.config.searchSettings.useGeoLocaleQueries ?
+                    data.userProfile.attributes.country : 'JP'
             )
         }
-        
+
         return allQueries
     }
 
@@ -789,8 +794,8 @@ export class Search extends Workers {
     private async generateNewsQueries(): Promise<string[]> {
         const currentDate = new Date()
         const currentYear = currentDate.getFullYear()
-        const currentMonth = currentDate.toLocaleDateString('en-US', { month: 'long' })
-        
+        const currentMonth = currentDate.toLocaleDateString('en-US', {month: 'long'})
+
         const newsQueries = [
             `${currentYear} news today`,
             `${currentMonth} ${currentYear} events`,
@@ -803,7 +808,7 @@ export class Search extends Workers {
             'sports news today',
             'weather forecast today'
         ]
-        
+
         // 随机选择3-5个时事查询
         const selectedCount = 3 + Math.floor(Math.random() * 3)
         return this.bot.utils.shuffleArray(newsQueries).slice(0, selectedCount)
@@ -830,7 +835,7 @@ export class Search extends Workers {
             'language learning',
             'photography tips'
         ]
-        
+
         // 随机选择2-4个常见查询
         const selectedCount = 2 + Math.floor(Math.random() * 3)
         return this.bot.utils.shuffleArray(commonTopics).slice(0, selectedCount)
@@ -857,7 +862,7 @@ export class Search extends Workers {
             'cultural festivals around world',
             'innovative technology startups'
         ]
-        
+
         // 随机选择2-3个随机话题
         const selectedCount = 2 + Math.floor(Math.random() * 2)
         return this.bot.utils.shuffleArray(randomTopics).slice(0, selectedCount)
@@ -889,10 +894,10 @@ export class Search extends Workers {
 
                 // 检查页面是否仍然响应
                 try {
-                    await searchPage.evaluate(() => document.readyState, { timeout: 5000 })
+                    await searchPage.evaluate(() => document.readyState, {timeout: 5000})
                 } catch (evalError) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Page evaluation failed, likely crashed. Creating new tab...', 'warn')
-                    
+
                     // 创建新的页面
                     try {
                         const context = searchPage.context()
@@ -932,22 +937,22 @@ export class Search extends Workers {
                                 isMobile: 'ontouchstart' in window,
                                 hasTouch: navigator.maxTouchPoints > 0,
                                 userAgent: navigator.userAgent,
-                                viewport: { 
-                                    width: window.innerWidth, 
-                                    height: window.innerHeight 
+                                viewport: {
+                                    width: window.innerWidth,
+                                    height: window.innerHeight
                                 },
                                 platform: navigator.platform,
                                 deviceMemory: navigator.deviceMemory || 'unknown'
                             }
                         })
-                        
-                        this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY', 
+
+                        this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY',
                             `Mobile features check: Touch=${mobileFeatures.hasTouch}, Viewport=${mobileFeatures.viewport.width}x${mobileFeatures.viewport.height}, Platform=${mobileFeatures.platform}`)
-                        
+
                         // 如果检测到移动端特征不正确，尝试修复
                         if (!mobileFeatures.hasTouch || mobileFeatures.viewport.width > 600) {
                             this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY', 'Mobile features not properly set, attempting to reinforce...', 'warn')
-                            
+
                             // 强化移动端特征
                             await searchPage.evaluate(() => {
                                 // 设置移动端特征
@@ -955,26 +960,27 @@ export class Search extends Workers {
                                     writable: false,
                                     value: 5
                                 })
-                                
+
                                 // 触发触摸事件支持
                                 if (!('ontouchstart' in window)) {
-                                    window.ontouchstart = () => {}
+                                    window.ontouchstart = () => {
+                                    }
                                 }
-                                
+
                                 // 确保移动端UA检测
                                 if (!navigator.userAgent.includes('Mobile')) {
                                     this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY', 'User-Agent missing Mobile identifier!', 'error')
                                 }
                             })
                         }
-                        
+
                         // 设置移动端专用HTTP头部
                         await searchPage.setExtraHTTPHeaders({
                             'sec-ch-ua-mobile': '?1',
                             'sec-ch-ua-platform': '"Android"',
                             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8'
                         })
-                        
+
                     } catch (verifyError) {
                         this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY', `Mobile verification failed: ${verifyError}`, 'warn')
                     }
@@ -986,7 +992,7 @@ export class Search extends Workers {
                 } catch (scrollError) {
                     // 如果快捷键失败，尝试直接导航到顶部
                     try {
-                        await searchPage.evaluate(() => window.scrollTo(0, 0), { timeout: 2000 })
+                        await searchPage.evaluate(() => window.scrollTo(0, 0), {timeout: 2000})
                     } catch (evalError) {
                         this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Unable to scroll to top, continuing...', 'warn')
                     }
@@ -998,26 +1004,26 @@ export class Search extends Workers {
                 const currentUrl = searchPage.url()
                 if (!currentUrl.includes('bing.com')) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Not on Bing page, navigating to Bing...', 'warn')
-                    await searchPage.goto('https://bing.com', { waitUntil: 'domcontentloaded', timeout: 30000 })
+                    await searchPage.goto('https://bing.com', {waitUntil: 'domcontentloaded', timeout: 30000})
                     await this.bot.utils.wait(2000)
                 }
 
                 const searchBar = '#sb_form_q'
-                
+
                 // 等待搜索框出现，增加重试机制
                 let searchBarFound = false
                 for (let waitAttempt = 0; waitAttempt < 3; waitAttempt++) {
                     try {
-                await searchPage.waitForSelector(searchBar, { state: 'visible', timeout: 30000 })
+                        await searchPage.waitForSelector(searchBar, {state: 'visible', timeout: 30000})
                         searchBarFound = true
                         break
                     } catch (waitError) {
                         this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Search bar not found, attempt ${waitAttempt + 1}/3`, 'warn')
-                        
+
                         // 尝试刷新页面
                         if (waitAttempt < 2) {
                             try {
-                                await searchPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 })
+                                await searchPage.reload({waitUntil: 'domcontentloaded', timeout: 15000})
                                 await this.bot.utils.wait(3000)
                             } catch (reloadError) {
                                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Page reload failed: ${reloadError}`, 'warn')
@@ -1025,23 +1031,23 @@ export class Search extends Workers {
                         }
                     }
                 }
-                
+
                 if (!searchBarFound) {
                     throw new Error('Search bar not found after 3 attempts')
                 }
-                
+
                 // 添加焦点检查和重试机制
                 let clickRetries = 0
                 while (clickRetries < 5) {
                     try {
-                        await searchPage.click(searchBar, { timeout: 8000 })
-                        
+                        await searchPage.click(searchBar, {timeout: 8000})
+
                         // 验证搜索框是否已获得焦点
                         const isFocused = await searchPage.evaluate(() => {
                             const element = document.querySelector('#sb_form_q') as HTMLInputElement
                             return element && element === document.activeElement
                         })
-                        
+
                         if (isFocused) {
                             break
                         } else if (clickRetries < 4) {
@@ -1058,7 +1064,7 @@ export class Search extends Workers {
                     }
                     clickRetries++
                 }
-                
+
                 // 🚀 执行下一代反检测策略
                 try {
                     const operationContext = {
@@ -1096,7 +1102,7 @@ export class Search extends Workers {
 
                 // 使用增强的人类化打字输入
                 await this.humanBehavior.humanType(searchPage, query)
-                
+
                 // 5%概率使用搜索建议
                 if (Math.random() < 0.05) {
                     const suggestionClicked = await this.clickSearchSuggestion(searchPage)
@@ -1104,10 +1110,10 @@ export class Search extends Workers {
                         this.bot.log(this.bot.isMobile, 'SEARCH-BEHAVIOR', 'Used search suggestion instead of typing full query')
                     }
                 }
-                
+
                 // 随机的提交前停顿
                 await this.bot.utils.wait(Math.random() * 1000 + 500)
-                
+
                 await searchPage.keyboard.press('Enter')
 
                 await this.bot.utils.wait(3000)
@@ -1128,13 +1134,27 @@ export class Search extends Workers {
 
                 // 添加页面加载超时检查
                 try {
-                    await resultPage.waitForLoadState('domcontentloaded', { timeout: 15000 })
+                    await resultPage.waitForLoadState('domcontentloaded', {timeout: 15000})
                 } catch (loadError) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Page load timeout: ${loadError}`, 'warn')
                     // 继续执行，可能页面已经部分加载
                 }
 
                 await this.bot.browser.utils.reloadBadPage(resultPage)
+
+                // <div class="banner"><div class="banner-container"><div class="banner-content"><div class="banner-icon"><img class="rms_img" loading="lazy" src="/rp/tWiuavlqiKIvA7l0-qYN7_MAF68.svg" data-bm="14"></div><div class="banner-text">Enhance your search experience with a quick verification.</div></div><button id="verify-btn" class="verify-btn">Verify</button></div></div>
+                // 检查当前页面是否有验证 verify-btn
+                const verifyButton = await resultPage.$('#verify-btn')
+                if (verifyButton) {
+                    this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Verification button detected on results page, clicking...', 'warn')
+                    try {
+                        await verifyButton.click()
+                        await this.bot.utils.wait(3000)
+                    } catch (verifyError) {
+                        this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Failed to click verification button: ${verifyError}`, 'error')
+                        // 继续执行搜索
+                    }
+                }
 
                 // 移动端搜索后验证：检查是否在移动版Bing
                 if (this.bot.isMobile) {
@@ -1150,12 +1170,12 @@ export class Search extends Workers {
                                 touchPoints: navigator.maxTouchPoints > 0
                             }
                         })
-                        
+
                         if (!isMobileBing.userAgent || !isMobileBing.touchPoints) {
-                            this.bot.log(this.bot.isMobile, 'MOBILE-BING-CHECK', 
+                            this.bot.log(this.bot.isMobile, 'MOBILE-BING-CHECK',
                                 `Warning: Mobile features not detected on result page. UA Mobile: ${isMobileBing.userAgent}, Touch: ${isMobileBing.touchPoints}`, 'warn')
                         } else {
-                            this.bot.log(this.bot.isMobile, 'MOBILE-BING-CHECK', 
+                            this.bot.log(this.bot.isMobile, 'MOBILE-BING-CHECK',
                                 `✓ Mobile Bing detected: Width=${isMobileBing.width}, Touch=${isMobileBing.touchPoints}`)
                         }
                     } catch (checkError) {
@@ -1166,9 +1186,9 @@ export class Search extends Workers {
                 // 🌊 执行量子级行为模拟
                 try {
                     const quantumActions = [
-                        { type: 'scroll', parameters: { direction: 'down' }, probability: 0.7 },
-                        { type: 'hover', parameters: { element: 'random' }, probability: 0.3 },
-                        { type: 'click', parameters: { element: 'result' }, probability: 0.8 }
+                        {type: 'scroll', parameters: {direction: 'down'}, probability: 0.7},
+                        {type: 'hover', parameters: {element: 'random'}, probability: 0.3},
+                        {type: 'click', parameters: {element: 'result'}, probability: 0.8}
                     ]
                     await this.nextGenController.executeQuantumBehavior(resultPage, quantumActions)
                 } catch (quantumError) {
@@ -1197,7 +1217,7 @@ export class Search extends Workers {
 
                 // 智能延迟系统
                 const delayMs = await this.calculateSmartDelay(i)
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING-DELAY', `Waiting ${Math.round(delayMs/1000)}s before next search...`)
+                this.bot.log(this.bot.isMobile, 'SEARCH-BING-DELAY', `Waiting ${Math.round(delayMs / 1000)}s before next search...`)
                 await this.bot.utils.wait(delayMs)
 
                 // 获取搜索点数，添加超时保护
@@ -1205,14 +1225,14 @@ export class Search extends Workers {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Fetching updated search points...')
                     const searchPoints = await Promise.race([
                         this.bot.browser.func.getSearchPoints(),
-                        new Promise((_, reject) => 
+                        new Promise((_, reject) =>
                             setTimeout(() => reject(new Error('getSearchPoints timeout after 20 seconds')), 20000)
                         )
                     ]) as Counters
-                    
+
                     // 搜索成功，重置失败计数
                     this.handleSearchSuccess()
-                    
+
                     return searchPoints
                 } catch (pointsError) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Failed to get search points: ${pointsError}`, 'warn')
@@ -1223,20 +1243,20 @@ export class Search extends Workers {
             } catch (error) {
                 // 处理搜索失败
                 this.handleSearchFailure()
-                
+
                 // 增强的错误检测和分类
                 const errorMessage = String(error)
                 const isBrowserClosed = errorMessage.includes('Target page, context or browser has been closed') ||
-                                      errorMessage.includes('page.reload: Target page') ||
-                                      searchPage.isClosed()
+                    errorMessage.includes('page.reload: Target page') ||
+                    searchPage.isClosed()
 
                 const isTargetCrashed = errorMessage.includes('Target crashed') ||
-                                       errorMessage.includes('page.evaluate: Target crashed') ||
-                                       errorMessage.includes('Protocol error')
+                    errorMessage.includes('page.evaluate: Target crashed') ||
+                    errorMessage.includes('Protocol error')
 
                 const isMemoryError = errorMessage.includes('out of memory') ||
-                                     errorMessage.includes('memory') ||
-                                     errorMessage.includes('OOM')
+                    errorMessage.includes('memory') ||
+                    errorMessage.includes('OOM')
 
                 if (isBrowserClosed) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Browser or page has been closed, ending search', 'warn')
@@ -1244,8 +1264,8 @@ export class Search extends Workers {
                 }
 
                 if (isTargetCrashed || isMemoryError) {
-                    this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Page crashed (attempt ${i+1}/5): ${errorMessage}`, 'error')
-                    
+                    this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Page crashed (attempt ${i + 1}/5): ${errorMessage}`, 'error')
+
                     // 如果页面崩溃，尝试创建新页面
                     if (i < 4) { // 还有重试机会
                         try {
@@ -1278,7 +1298,7 @@ export class Search extends Workers {
                 }
 
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Search failed, An error occurred:' + error, 'error')
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Retrying search, attempt ${i+1}/5`, 'warn')
+                this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Retrying search, attempt ${i + 1}/5`, 'warn')
 
                 try {
                     // Reset the tabs
@@ -1308,11 +1328,11 @@ export class Search extends Workers {
                 await this.simulateMobileUserBehaviorSafe(page)
                 return
             }
-            
+
             // 桌面端安全行为模拟
             const behaviors = ['scroll', 'click', 'simple_wait', 'none']
             const selectedBehavior = behaviors[Math.floor(Math.random() * behaviors.length)]
-            
+
             switch (selectedBehavior) {
                 case 'scroll':
                     if (this.bot.config.searchSettings.scrollRandomResults) {
@@ -1320,19 +1340,19 @@ export class Search extends Workers {
                         await this.safeRandomScroll(page)
                     }
                     break
-                    
+
                 case 'click':
                     if (this.bot.config.searchSettings.clickRandomResults) {
                         await this.bot.utils.wait(2000 + Math.random() * 3000)
                         await this.safeClickRandomLink(page)
                     }
                     break
-                    
+
                 case 'simple_wait':
                     // 简单等待，最安全的选择
                     await this.bot.utils.wait(2000 + Math.random() * 3000)
                     break
-                    
+
                 case 'none':
                     // 只是查看结果，不做任何操作
                     await this.bot.utils.wait(3000 + Math.random() * 2000)
@@ -1352,21 +1372,21 @@ export class Search extends Workers {
         try {
             // 使用简单的等待和基本操作，避免复杂的evaluate调用
             const behaviorPattern = Math.random()
-            
+
             if (behaviorPattern < 0.4) {
                 // 40% - 简单等待模式（最安全）
                 await this.bot.utils.wait(2000 + Math.random() * 3000)
-                
+
             } else if (behaviorPattern < 0.7) {
                 // 30% - 基本滚动模式
                 await this.bot.utils.wait(1000 + Math.random() * 1000)
-                
+
                 // 使用键盘滚动而不是evaluate
                 for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
                     await page.keyboard.press('PageDown')
                     await this.bot.utils.wait(1000 + Math.random() * 1500)
                 }
-                
+
             } else {
                 // 30% - 尝试安全点击
                 if (this.bot.config.searchSettings.clickRandomResults) {
@@ -1374,7 +1394,7 @@ export class Search extends Workers {
                     await this.safeClickMobileResult(page)
                 }
             }
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'MOBILE-BEHAVIOR-SAFE', `Safe mobile behavior failed: ${error}`, 'warn')
             // 失败时简单等待
@@ -1389,18 +1409,18 @@ export class Search extends Workers {
         try {
             // 使用键盘滚动而不是evaluate，更稳定
             const scrollSteps = 1 + Math.floor(Math.random() * 3) // 1-3次滚动
-            
+
             for (let i = 0; i < scrollSteps; i++) {
                 await page.keyboard.press('PageDown')
                 await this.bot.utils.wait(800 + Math.random() * 1200)
             }
-            
+
             // 偶尔滚回顶部
             if (Math.random() < 0.3) {
                 await this.bot.utils.wait(500)
                 await page.keyboard.press('Home')
             }
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SAFE-SCROLL', `Safe scroll failed: ${error}`, 'warn')
         }
@@ -1416,20 +1436,20 @@ export class Search extends Workers {
                 '.b_algo h2 a',
                 '#b_results h2 a'
             ]
-            
+
             for (const selector of selectors) {
                 try {
                     const elements = await page.$$(selector)
                     if (elements.length > 0) {
                         const randomIndex = Math.floor(Math.random() * Math.min(elements.length, 3)) // 只点击前3个
                         const element = elements[randomIndex]
-                        
+
                         if (element) {
-                            await element.click({ timeout: 3000 })
+                            await element.click({timeout: 3000})
                             await this.bot.utils.wait(2000 + Math.random() * 3000)
-                            
+
                             // 返回搜索结果
-                            await page.goBack({ timeout: 5000 })
+                            await page.goBack({timeout: 5000})
                             await this.bot.utils.wait(1000)
                             break
                         }
@@ -1453,16 +1473,16 @@ export class Search extends Workers {
                 '#b_results .b_algo h2 a',
                 '.b_algo h2 a'
             ]
-            
+
             for (const selector of mobileSelectors) {
                 try {
                     const elements = await page.$$(selector)
                     if (elements.length > 0) {
                         const element = elements[0] // 总是点击第一个结果
                         if (element) {
-                            await element.click({ timeout: 3000 })
+                            await element.click({timeout: 3000})
                             await this.bot.utils.wait(3000 + Math.random() * 2000)
-                            await page.goBack({ timeout: 5000 })
+                            await page.goBack({timeout: 5000})
                             await this.bot.utils.wait(1000)
                             break
                         }
@@ -1477,7 +1497,6 @@ export class Search extends Workers {
     }
 
 
-
     /**
      * 智能延迟计算系统 - 使用新的反检测延迟系统
      */
@@ -1489,7 +1508,7 @@ export class Search extends Workers {
         // 记录延迟调整信息
         if (this.consecutiveFailures > 0) {
             this.bot.log(this.bot.isMobile, 'SEARCH-ADAPTIVE-DELAY',
-                `Adjusted delay due to ${this.consecutiveFailures} consecutive failures: ${Math.round(delay/1000)}s`)
+                `Adjusted delay due to ${this.consecutiveFailures} consecutive failures: ${Math.round(delay / 1000)}s`)
         }
 
         // 记录搜索到会话管理器
@@ -1499,7 +1518,7 @@ export class Search extends Workers {
         const interruption = this.sessionManager.simulateLifeInterruption()
         if (interruption.shouldInterrupt) {
             this.bot.log(this.bot.isMobile, 'SEARCH-LIFE-INTERRUPTION',
-                `Life interruption: ${interruption.reason} (${Math.round(interruption.duration/1000)}s)`)
+                `Life interruption: ${interruption.reason} (${Math.round(interruption.duration / 1000)}s)`)
             return delay + interruption.duration
         }
 
@@ -1524,7 +1543,7 @@ export class Search extends Workers {
         this.consecutiveFailures++
         this.adaptiveDelayMultiplier = Math.min(2.0, this.adaptiveDelayMultiplier + 0.2)
     }
-    
+
     /**
      * 处理搜索成功，重置自适应参数
      */
@@ -1580,7 +1599,7 @@ export class Search extends Workers {
 
             const trendsData = this.extractJsonFromResponse(rawText)
             if (!trendsData) {
-               throw  this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'Failed to parse Google Trends response', 'error')
+                throw this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'Failed to parse Google Trends response', 'error')
             }
 
             const mappedTrendsData = trendsData.map(query => [query[0], query[9]!.slice(1)])
@@ -1610,13 +1629,13 @@ export class Search extends Workers {
     private async getChinaTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
         const chinaConfig = this.bot.config.searchSettings.chinaRegionAdaptation
-        
+
         // 如果未启用中国地区适配，直接返回备用查询
         if (!chinaConfig?.enabled) {
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', 'China region adaptation disabled, using fallback queries')
             return this.getChineseFallbackQueries()
         }
-        
+
         try {
             // 方案1：使用百度热搜榜
             if (chinaConfig.useBaiduTrends) {
@@ -1641,7 +1660,7 @@ export class Search extends Workers {
             }
 
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${queryTerms.length} search queries for China region`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Error getting China trends: ${error}`, 'warn')
             // 使用预定义的备用查询
@@ -1658,7 +1677,7 @@ export class Search extends Workers {
      */
     private async getBaiduTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
-        
+
         try {
             // 百度热搜榜API
             const request: AxiosRequestConfig = {
@@ -1675,14 +1694,12 @@ export class Search extends Workers {
             const htmlContent = response.data as string
 
             // 解析热搜数据
-            // 百度热搜数据通常在 window.__INITIAL_STATE__ 中
-            const dataMatch = htmlContent.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/)
-            if (dataMatch && dataMatch[1]) {
+            const dataMatch = htmlContent.match(/<!--s-data:(.*?)-->/s)
+            if (dataMatch) {
                 try {
-                    const data = JSON.parse(dataMatch[1])
-                    const hotList = data?.hotList || []
-                    
-                    for (const item of hotList.slice(0, 30)) { // 取前30个热搜
+                    const data = JSON.parse(dataMatch?.[1] || '{}')?.data?.cards?.[0]?.content || []
+
+                    for (const item of data.slice(0, 30)) { // 取前30个热搜
                         if (item.word) {
                             queryTerms.push({
                                 topic: item.word,
@@ -1696,7 +1713,7 @@ export class Search extends Workers {
             }
 
             this.bot.log(this.bot.isMobile, 'BAIDU-TRENDS', `Fetched ${queryTerms.length} trends from Baidu`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'BAIDU-TRENDS', `Error fetching Baidu trends: ${error}`, 'warn')
         }
@@ -1709,7 +1726,7 @@ export class Search extends Workers {
      */
     private async getWeiboTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
-        
+
         try {
             // 微博热搜API
             const request: AxiosRequestConfig = {
@@ -1736,7 +1753,7 @@ export class Search extends Workers {
             }
 
             this.bot.log(this.bot.isMobile, 'WEIBO-TRENDS', `Fetched ${queryTerms.length} trends from Weibo`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'WEIBO-TRENDS', `Error fetching Weibo trends: ${error}`, 'warn')
         }
@@ -1758,7 +1775,7 @@ export class Search extends Workers {
             `${baseQuery} 影响`,
             `${baseQuery} 评论`
         ]
-        
+
         // 随机选择3-5个相关词
         const selectedCount = 3 + Math.floor(Math.random() * 3)
         return this.bot.utils.shuffleArray(patterns).slice(0, selectedCount)
@@ -1771,7 +1788,7 @@ export class Search extends Workers {
         const currentDate = new Date()
         const currentYear = currentDate.getFullYear()
         const currentMonth = currentDate.getMonth() + 1
-        
+
         const topics = [
             // 时事热点
             `${currentYear}年${currentMonth}月新闻`,
@@ -1783,7 +1800,7 @@ export class Search extends Workers {
             '科技新闻',
             '体育新闻',
             '娱乐新闻',
-            
+
             // 生活相关
             '天气预报',
             '美食推荐',
@@ -1793,7 +1810,7 @@ export class Search extends Workers {
             '电影推荐',
             '音乐排行榜',
             '游戏攻略',
-            
+
             // 科技话题
             '人工智能',
             '5G技术',
@@ -1803,7 +1820,7 @@ export class Search extends Workers {
             '软件推荐',
             '编程教程',
             '区块链',
-            
+
             // 热门品牌和产品
             '华为',
             '小米',
@@ -1817,7 +1834,7 @@ export class Search extends Workers {
             '淘宝',
             '京东',
             '拼多多',
-            
+
             // 教育学习
             '考研',
             '高考',
@@ -1825,14 +1842,14 @@ export class Search extends Workers {
             '编程学习',
             '职业规划',
             '面试技巧',
-            
+
             // 投资理财
             '股票行情',
             '基金推荐',
             '理财产品',
             '房价走势',
             '黄金价格',
-            
+
             // 热门话题
             '减肥方法',
             '护肤技巧',
@@ -1842,7 +1859,7 @@ export class Search extends Workers {
             '植物种植',
             '美食制作',
             '旅游景点',
-            
+
             // 节日相关（根据时间动态调整）
             '春节',
             '中秋节',
@@ -1850,7 +1867,7 @@ export class Search extends Workers {
             '双十一',
             '双十二'
         ]
-        
+
         // 将简单的字符串转换为 GoogleSearch 格式
         return topics.map(topic => ({
             topic,
@@ -1941,13 +1958,13 @@ export class Search extends Workers {
             // 桌面端计算PC搜索 + Edge搜索
             const genericMissing = genericData ? genericData.pointProgressMax - genericData.pointProgress : 0
             const edgeMissing = edgeData ? edgeData.pointProgressMax - edgeData.pointProgress : 0
-            
+
             // 记录详细的桌面端积分状态
             if (genericData || edgeData) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-BREAKDOWN', 
+                this.bot.log(this.bot.isMobile, 'SEARCH-POINTS-BREAKDOWN',
                     `Desktop breakdown: PC(${genericData?.pointProgress || 0}/${genericData?.pointProgressMax || 0}), Edge(${edgeData?.pointProgress || 0}/${edgeData?.pointProgressMax || 0})`)
             }
-            
+
             return genericMissing + edgeMissing
         }
     }
@@ -1958,23 +1975,23 @@ export class Search extends Workers {
     private async getSmartSearchDelay(): Promise<number> {
         const baseMin = this.bot.isMobile ? 60000 : 45000 // 移动端60s，桌面端45s
         const baseMax = this.bot.isMobile ? 150000 : 120000 // 移动端150s，桌面端120s
-        
+
         // 根据连续失败次数调整延迟
         const failureMultiplier = Math.min(1 + (this.consecutiveFailures * 0.5), 3) // 最多3倍延迟
-        
+
         // 根据自适应倍数调整
         const adaptiveMultiplier = this.adaptiveDelayMultiplier
-        
+
         const adjustedMin = baseMin * failureMultiplier * adaptiveMultiplier
         const adjustedMax = baseMax * failureMultiplier * adaptiveMultiplier
-        
+
         const delay = Math.floor(Math.random() * (adjustedMax - adjustedMin + 1)) + adjustedMin
-        
+
         if (failureMultiplier > 1 || adaptiveMultiplier > 1) {
-            this.bot.log(this.bot.isMobile, 'SEARCH-SMART-DELAY', 
-                `Smart delay: ${Math.round(delay/1000)}s (base: ${Math.round(baseMin/1000)}-${Math.round(baseMax/1000)}s, failure multiplier: ${failureMultiplier.toFixed(1)}, adaptive: ${adaptiveMultiplier.toFixed(1)})`)
+            this.bot.log(this.bot.isMobile, 'SEARCH-SMART-DELAY',
+                `Smart delay: ${Math.round(delay / 1000)}s (base: ${Math.round(baseMin / 1000)}-${Math.round(baseMax / 1000)}s, failure multiplier: ${failureMultiplier.toFixed(1)}, adaptive: ${adaptiveMultiplier.toFixed(1)})`)
         }
-        
+
         return delay
     }
 
@@ -2013,7 +2030,7 @@ export class Search extends Workers {
                 `${baseQuery} 教程`
             ]
         }
-        
+
         const patterns = contextualPatterns[language] || contextualPatterns['en']
         // 随机选择2-3个相关搜索
         const selectedCount = 2 + Math.floor(Math.random() * 2)
@@ -2035,14 +2052,14 @@ export class Search extends Workers {
         try {
             // 等待搜索建议出现
             await this.bot.utils.wait(500 + Math.random() * 1000)
-            
+
             // 搜索建议的选择器
             const suggestionSelectors = [
                 '.sa_sg',  // Bing搜索建议
                 '.sa_tm_text',  // 相关搜索文本
                 '#sw_as .sa_tm'  // 下拉建议
             ]
-            
+
             for (const selector of suggestionSelectors) {
                 const suggestions = await page.$$(selector)
                 if (suggestions.length > 0) {
@@ -2056,7 +2073,7 @@ export class Search extends Workers {
                     }
                 }
             }
-            
+
             return false
         } catch (error) {
             return false
@@ -2070,13 +2087,13 @@ export class Search extends Workers {
         try {
             // 30%概率查看第二页
             if (Math.random() > 0.3) return false
-            
+
             // 滚动到页面底部
             await page.evaluate(() => {
                 window.scrollTo(0, document.body.scrollHeight)
             })
             await this.bot.utils.wait(1000 + Math.random() * 1000)
-            
+
             // 查找"下一页"按钮
             const nextPageSelectors = [
                 'a.sb_pagN',  // 下一页按钮
@@ -2084,21 +2101,21 @@ export class Search extends Workers {
                 'a[title="Next page"]',
                 'a[aria-label="下一页"]'
             ]
-            
+
             for (const selector of nextPageSelectors) {
                 const nextButton = await page.$(selector)
                 if (nextButton) {
                     await nextButton.click()
                     await this.bot.utils.wait(2000 + Math.random() * 2000)
                     this.bot.log(this.bot.isMobile, 'SEARCH-PAGINATION', 'Navigated to second page')
-                    
+
                     // 在第二页稍作停留
                     await this.safeRandomScroll(page)
-                    
+
                     return true
                 }
             }
-            
+
             return false
         } catch (error) {
             return false
@@ -2110,14 +2127,14 @@ export class Search extends Workers {
      */
     private async generateAdditionalQueries(): Promise<(GoogleSearch | string)[]> {
         const additionalQueries: (GoogleSearch | string)[] = []
-        
+
         try {
             // 1. 基于时间的查询
             const currentDate = new Date()
             const currentYear = currentDate.getFullYear()
             const currentMonth = currentDate.getMonth() + 1
             const currentDay = currentDate.getDate()
-            
+
             const timeBasedQueries = [
                 `${currentYear}年${currentMonth}月のニュース`,
                 `${currentYear}年の出来事`,
@@ -2128,19 +2145,19 @@ export class Search extends Workers {
                 '最新技術',
                 '注目の話題'
             ]
-            
+
             additionalQueries.push(...timeBasedQueries)
-            
+
             // 2. 随机生成的组合查询
             const subjects = ['技術', '映画', '音楽', '料理', '旅行', '健康', '学習', 'ビジネス', 'スポーツ', 'ファッション']
             const modifiers = ['最新', '人気', 'おすすめ', 'ランキング', 'レビュー', '比較', '方法', 'コツ']
-            
+
             for (let i = 0; i < 10; i++) {
                 const subject = subjects[Math.floor(Math.random() * subjects.length)]
                 const modifier = modifiers[Math.floor(Math.random() * modifiers.length)]
                 additionalQueries.push(`${subject} ${modifier}`)
             }
-            
+
             // 3. 常见搜索模式
             const commonPatterns = [
                 'どうやって',
@@ -2152,20 +2169,20 @@ export class Search extends Workers {
                 'いくら',
                 'どのくらい'
             ]
-            
+
             const topics = ['仕事', '勉強', '家族', '友達', 'お金', '時間', '健康', '幸せ']
-            
+
             for (const pattern of commonPatterns) {
                 const topic = topics[Math.floor(Math.random() * topics.length)]
                 additionalQueries.push(`${pattern}${topic}`)
             }
-            
+
             this.bot.log(this.bot.isMobile, 'SEARCH-ADDITIONAL', `Generated ${additionalQueries.length} additional search queries`)
-            
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-ADDITIONAL-ERROR', `Error generating additional queries: ${error}`, 'warn')
         }
-        
+
         return additionalQueries
     }
 
@@ -2174,31 +2191,31 @@ export class Search extends Workers {
      */
     public async doSearchWithUltraAntiDetection(page: Page, data: DashboardData) {
         // 导入防检测调度器
-        const { UltraAntiDetectionScheduler } = await import('../../src/anti-detection/ultra-anti-detection.js')
+        const {UltraAntiDetectionScheduler} = await import('../../src/anti-detection/ultra-anti-detection.js')
         const antiDetectionScheduler = new UltraAntiDetectionScheduler(this.bot)
-        
+
         this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🛡️ Starting Ultra Anti-Detection Search')
-        
+
         // 生成用户行为档案
         const userProfile = antiDetectionScheduler.generateUserProfile()
         this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', `👤 User Profile: ${userProfile.name} (${userProfile.searchStyle})`)
-        
+
         // 检查是否是最佳活动时间
         if (!antiDetectionScheduler.isOptimalActivityTime()) {
             const delayMinutes = 5 + Math.random() * 15
             this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', `⏰ Suboptimal time detected, delaying ${delayMinutes.toFixed(1)} minutes`)
             await this.bot.utils.wait(delayMinutes * 60 * 1000)
         }
-        
+
         // 随机决定是否在搜索开始前模拟其他活动
         if (Math.random() < 0.4) {
             this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🎭 Pre-search activity simulation')
             await antiDetectionScheduler.simulateSessionInterruption(page)
         }
-        
+
         // 执行原有的搜索逻辑，但添加增强的行为模拟
         await this.doSearchWithEnhancedBehavior(page, data, antiDetectionScheduler, userProfile)
-        
+
         this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🎉 Ultra Anti-Detection Search Completed')
     }
 
@@ -2222,7 +2239,7 @@ export class Search extends Workers {
         let allSearchQueries = await this.generateDiversifiedQueries(data)
         allSearchQueries = this.bot.utils.shuffleArray(allSearchQueries) as (GoogleSearch | string)[]
         allSearchQueries = Array.from(new Set(allSearchQueries))
-        
+
         this.bot.log(this.bot.isMobile, 'SEARCH-QUERY-SOURCE', `Generated ${allSearchQueries.length} diversified search queries`)
 
         // 导航到Bing
@@ -2232,11 +2249,11 @@ export class Search extends Workers {
 
         // 准备查询列表
         const queries: string[] = []
-        allSearchQueries.forEach(x => { 
+        allSearchQueries.forEach(x => {
             if (typeof x === 'string') {
                 queries.push(x)
             } else {
-                this.bot.isMobile ? queries.push(x.topic) : queries.push(x.topic, ...x.related) 
+                this.bot.isMobile ? queries.push(x.topic) : queries.push(x.topic, ...x.related)
             }
         })
 
@@ -2247,24 +2264,24 @@ export class Search extends Workers {
         let earnedPoints = 0
         let maxLoop = 0
         let sessionInterruptionCount = 0
-        
+
         this.bot.log(this.bot.isMobile, 'SEARCH-PROGRESS', `Starting enhanced search: ${missingPoints} points needed, ${queries.length} queries available`)
-        
+
         for (let i = 0; i < queries.length; i++) {
             // 检查总体超时
             if (Date.now() - searchStartTime > searchTimeoutMs) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Enhanced search timeout after 30 minutes, stopping searches', 'warn')
                 break
             }
-            
+
             const query = queries[i] as string
             completedSearches++
-            
+
             // 🎭 搜索前的多任务模拟
             if (userProfile.multitaskingLevel !== 'low') {
                 await antiDetectionScheduler.simulateMultitasking(page, `Search ${completedSearches}`)
             }
-            
+
             this.bot.log(this.bot.isMobile, 'SEARCH-BING', `[${completedSearches}/${queries.length}] ${missingPoints} Points Remaining | Query: ${query}`)
 
             // 执行搜索
@@ -2280,7 +2297,7 @@ export class Search extends Workers {
                 maxLoop++
                 if (maxLoop === 3) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-WARNING', `⚠️ No points gained for ${maxLoop} searches, may need enhanced delays`)
-                    
+
                     // 🎭 模拟用户困惑和重新尝试的行为
                     await this.simulateUserConfusion(page, antiDetectionScheduler)
                 }
@@ -2295,12 +2312,12 @@ export class Search extends Workers {
 
             // 🕒 智能延迟系统 + 会话管理
             const shouldTakeBreak = this.shouldTakeSessionBreak(completedSearches, sessionInterruptionCount, userProfile)
-            
+
             if (shouldTakeBreak) {
                 sessionInterruptionCount++
                 this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '☕ Taking session break based on user profile')
                 await antiDetectionScheduler.simulateSessionInterruption(page)
-                
+
                 // 会话恢复后的重新定向
                 try {
                     await page.goto(this.searchPageURL ? this.searchPageURL : this.bingHome)
@@ -2311,16 +2328,16 @@ export class Search extends Workers {
             } else {
                 // 标准智能延迟
                 const smartDelay = await this.getEnhancedSmartSearchDelay(completedSearches, userProfile)
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING-DELAY', `Waiting ${Math.round(smartDelay/1000)}s (enhanced delay)...`)
+                this.bot.log(this.bot.isMobile, 'SEARCH-BING-DELAY', `Waiting ${Math.round(smartDelay / 1000)}s (enhanced delay)...`)
                 await this.bot.utils.wait(smartDelay)
             }
 
             // 桌面端和移动端使用不同的maxLoop限制
             const maxLoopLimit = this.bot.isMobile ? 8 : 12 // 增加容忍度
-            
+
             if (maxLoop > maxLoopLimit) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Enhanced search didn't gain point for ${maxLoopLimit} iterations, entering recovery mode`, 'warn')
-                
+
                 // 🔄 恢复模式
                 await this.enterRecoveryMode(page, antiDetectionScheduler)
                 maxLoop = 0
@@ -2336,11 +2353,12 @@ export class Search extends Workers {
      */
     private async simulateUserConfusion(page: Page, antiDetectionScheduler: UltraAntiDetectionScheduler): Promise<void> {
         this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🤔 Simulating user confusion behavior')
-        
+
         const confusionBehaviors = [
             async () => {
                 // 刷新页面
-                await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+                await page.reload({waitUntil: 'domcontentloaded'}).catch(() => {
+                })
                 await this.bot.utils.wait(3000)
             },
             async () => {
@@ -2357,7 +2375,7 @@ export class Search extends Workers {
                 await this.bot.utils.wait(1000)
             }
         ]
-        
+
         const randomIndex = Math.floor(Math.random() * confusionBehaviors.length)
         const behavior = confusionBehaviors[randomIndex]
         if (behavior) {
@@ -2371,16 +2389,16 @@ export class Search extends Workers {
     private shouldTakeSessionBreak(completedSearches: number, sessionInterruptionCount: number, userProfile: UserProfile): boolean {
         // 基于用户档案的休息概率
         const baseBreakProbability = userProfile.breakProbability
-        
+
         // 搜索次数越多，休息概率越高
         const searchFatigue = Math.min(completedSearches * 0.02, 0.3)
-        
+
         // 距离上次休息的搜索次数
         const searchesSinceLastBreak = completedSearches - (sessionInterruptionCount * 8) // 假设每8次搜索后可能休息
         const restNeed = Math.max(0, (searchesSinceLastBreak - 15) * 0.05) // 15次搜索后开始需要休息
-        
+
         const totalBreakProbability = Math.min(baseBreakProbability + searchFatigue + restNeed, 0.7)
-        
+
         return Math.random() < totalBreakProbability
     }
 
@@ -2389,12 +2407,13 @@ export class Search extends Workers {
      */
     private async enterRecoveryMode(page: Page, antiDetectionScheduler: UltraAntiDetectionScheduler): Promise<void> {
         this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🔄 Entering recovery mode')
-        
+
         // 模拟用户尝试解决问题的行为
         const recoveryActions = [
             async () => {
                 // 清除缓存和重新加载
-                await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+                await page.reload({waitUntil: 'domcontentloaded'}).catch(() => {
+                })
                 await this.bot.utils.wait(5000)
             },
             async () => {
@@ -2407,7 +2426,7 @@ export class Search extends Workers {
                 await this.bot.utils.wait(120000 + Math.random() * 180000) // 2-5分钟
             }
         ]
-        
+
         const randomIndex = Math.floor(Math.random() * recoveryActions.length)
         const action = recoveryActions[randomIndex]
         if (action) {
@@ -2421,7 +2440,7 @@ export class Search extends Workers {
     private async getEnhancedSmartSearchDelay(searchIndex: number, userProfile: UserProfile): Promise<number> {
         // 获取基础延迟
         const baseDelay = await this.calculateSmartDelay(searchIndex)
-        
+
         // 根据用户档案调整
         let profileMultiplier = 1.0
         switch (userProfile.searchStyle) {
@@ -2435,7 +2454,7 @@ export class Search extends Workers {
                 profileMultiplier = 1.8 // 分散注意力用户延迟最长
                 break
         }
-        
+
         // 时间段调整
         const hour = new Date().getHours()
         let timeMultiplier = 1.0
@@ -2444,16 +2463,16 @@ export class Search extends Workers {
         } else if (hour >= 22 || hour <= 6) {
             timeMultiplier = 0.8 // 深夜时间稍短延迟
         }
-        
+
         // 随机波动
         const randomFactor = 0.7 + Math.random() * 0.6 // ±30%变化
-        
+
         const enhancedDelay = Math.floor(baseDelay * profileMultiplier * timeMultiplier * randomFactor)
-        
+
         // 确保在合理范围内
         const minDelay = this.bot.isMobile ? 45000 : 60000 // 移动端45s，桌面端60s
         const maxDelay = this.bot.isMobile ? 300000 : 480000 // 移动端5分钟，桌面端8分钟
-        
+
         return Math.max(minDelay, Math.min(maxDelay, enhancedDelay))
     }
 
@@ -2465,7 +2484,7 @@ export class Search extends Workers {
         if (Math.random() < 0.2) {
             await antiDetectionScheduler.simulateMultitasking(page, 'pre-search')
         }
-        
+
         // 执行原有的搜索逻辑
         return await this.bingSearch(page, query)
     }

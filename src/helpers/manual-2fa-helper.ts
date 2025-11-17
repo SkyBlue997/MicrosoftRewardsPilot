@@ -1,15 +1,17 @@
 import { chromium, Page } from 'rebrowser-playwright'
 import * as readline from 'readline'
+import { getUserAgent } from '../../utils/UserAgent'
 
 /**
  * 移动端2FA验证辅助工具
  * 专门用于解决移动端Microsoft Rewards登录时的双因素认证问题
- * 
+ *
  * 特点：
- * - 自动使用移动端User-Agent
+ * - 自动使用最新版本的移动端User-Agent
  * - 只处理移动端会话数据
  * - 保存到标准会话目录 src/sessions/[email]/
  * - 支持中英文界面
+ * - 自动禁用FIDO/Passkey提示
  */
 
 const rl = readline.createInterface({
@@ -293,7 +295,7 @@ class Manual2FAHelper {
 
         console.log(this.strings.startingBrowser)
         
-        const browser = await chromium.launch({ 
+        const browser = await chromium.launch({
             headless: false, // 显示浏览器界面
             args: [
                 '--no-sandbox',
@@ -302,8 +304,11 @@ class Manual2FAHelper {
             ]
         })
 
+        // 获取最新的移动端User-Agent
+        const userAgentData = await getUserAgent(true)
+
         const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+            userAgent: userAgentData.userAgent,
             viewport: { width: 412, height: 915 }, // 模拟移动端屏幕尺寸
             deviceScaleFactor: 3, // 高分辨率移动设备
             isMobile: true, // 标识为移动设备
@@ -312,9 +317,9 @@ class Manual2FAHelper {
         })
 
         const page = await context.newPage()
-        
+
         console.log(this.strings.mobileMode)
-        console.log(this.strings.userAgent)
+        console.log(`🔍 User-Agent: ${userAgentData.userAgent}`)
         console.log(this.strings.screenSize)
 
         try {
@@ -325,15 +330,32 @@ class Manual2FAHelper {
             console.log(this.strings.pressAnyKey)
             await this.askQuestion('')
             await browser.close()
+            rl.close()
         }
     }
 
     private async performManualLogin(page: Page, email: string, password: string) {
         console.log(this.strings.loginFlow)
-        
+
+        // 禁用FIDO/Passkey提示，减少Passkey弹窗干扰
+        await page.route('**/GetCredentialType.srf*', (route: any) => {
+            const postData = route.request().postData()
+            if (postData) {
+                try {
+                    const body = JSON.parse(postData)
+                    body.isFidoSupported = false
+                    route.continue({ postData: JSON.stringify(body) })
+                } catch {
+                    route.continue()
+                }
+            } else {
+                route.continue()
+            }
+        })
+
         // 1. 导航到登录页面
         console.log(this.strings.navigateToLogin)
-        await page.goto('https://rewards.bing.com/signin')
+        await page.goto('https://www.bing.com/rewards/dashboard')
         await page.waitForLoadState('domcontentloaded')
 
         console.log(this.strings.pageLoaded)
@@ -405,19 +427,24 @@ class Manual2FAHelper {
 
         // 6. 等待授权完成
         console.log(this.strings.waitingOAuth)
-        
+
         let authorizationCode = ''
         const startTime = Date.now()
-        const timeout = 300000 // 5分钟超时
-        
+        // 支持环境变量配置超时时间，默认5分钟
+        const timeout = Number(process.env.OAUTH_MAX_WAIT_MS || 300000)
+        const timeoutMinutes = Math.round(timeout / 60000)
+        console.log(`⏱️ OAuth timeout: ${timeoutMinutes} minutes (可通过 OAUTH_MAX_WAIT_MS 环境变量配置)`)
+
         while (Date.now() - startTime < timeout) {
             const currentUrl = page.url()
             if (currentUrl.includes('oauth20_desktop.srf') && currentUrl.includes('code=')) {
                 const url = new URL(currentUrl)
                 authorizationCode = url.searchParams.get('code') || ''
                 if (authorizationCode) {
+                    const authDuration = Date.now() - startTime
                     console.log(this.strings.oauthSuccess)
                     console.log(`${this.strings.authCode}${authorizationCode.substring(0, 20)}...`)
+                    console.log(`⏱️ Authorization completed in ${Math.round(authDuration / 1000)}s`)
                     break
                 }
             }
@@ -480,16 +507,72 @@ class Manual2FAHelper {
         }
     }
 
+    /**
+     * 尝试自动关闭Passkey提示（轻量级，专门用于OAuth流程）
+     * 基于Login.ts的实现
+     */
+    private async tryDismissPasskey(page: Page): Promise<void> {
+        const passkeySelectors = [
+            // 5层检测策略
+            '#iLooksGood',                           // Layer 1: "Looks good" button
+            '#iCancel',                             // Layer 2: Cancel button
+            'input[id="KmsiCheckboxField"]',        // Layer 3: KMSI checkbox
+            '#acceptButton',                        // Layer 4: Accept button
+            'div[data-value="Fido"]'               // Layer 5: Fido option
+        ]
+
+        for (const selector of passkeySelectors) {
+            try {
+                const element = await page.waitForSelector(selector, { timeout: 500, state: 'visible' })
+                if (element) {
+                    // 针对KMSI checkbox的特殊处理
+                    if (selector === 'input[id="KmsiCheckboxField"]') {
+                        const isChecked = await element.isChecked()
+                        if (!isChecked) {
+                            await element.check({ timeout: 1000 })
+                        }
+                        // 检查后查找提交按钮
+                        const submitBtn = await page.waitForSelector('input[type="submit"]', { timeout: 1000, state: 'visible' })
+                        if (submitBtn) {
+                            await submitBtn.click({ timeout: 1000 })
+                            console.log('✓ Auto-dismissed KMSI prompt')
+                        }
+                    } else if (selector === 'div[data-value="Fido"]') {
+                        // 如果检测到Fido选项，尝试点击"Use a different method"
+                        const altMethodBtn = await page.waitForSelector('#signInAnotherWay', { timeout: 500, state: 'visible' })
+                        if (altMethodBtn) {
+                            await altMethodBtn.click({ timeout: 1000 })
+                            console.log('✓ Clicked alternative method to skip Passkey')
+                        }
+                    } else {
+                        await element.click({ timeout: 1000 })
+                        console.log(`✓ Auto-dismissed Passkey prompt using: ${selector}`)
+                    }
+                    await page.waitForTimeout(500)
+                }
+            } catch {
+                // 该选择器未找到，继续下一个
+            }
+        }
+    }
+
     private async handle2FAManually(page: Page) {
         console.log(this.strings.detecting2FA)
 
-        // 检查常见的2FA元素
+        // 首先尝试自动关闭Passkey提示
+        await this.tryDismissPasskey(page)
+
+        // 检查常见的2FA元素（扩展版本，与Login.ts保持一致）
         const checks = [
             { name: 'SMS验证码输入框', selector: 'input[name="otc"]' },
             { name: '邮箱验证码输入框', selector: 'input[name="proofconfirmation"]' },
             { name: 'Authenticator显示号码', selector: '#displaySign' },
+            { name: 'Authenticator应用', selector: '#idSpan_SAOTCAS_DescriptionText' },
             { name: 'Passkey页面', selector: '[data-testid="biometricVideo"]' },
-            { name: '其他验证方法按钮', selector: 'button:has-text("Use a different method")' }
+            { name: 'Passkey选项', selector: 'div[data-value="Fido"]' },
+            { name: '保持登录(KMSI)', selector: '#KmsiCheckboxField' },
+            { name: '其他验证方法按钮', selector: 'button:has-text("Use a different method")' },
+            { name: '其他验证方法(备选)', selector: '#signInAnotherWay' }
         ]
 
         for (const check of checks) {

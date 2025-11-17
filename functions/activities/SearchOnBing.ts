@@ -9,6 +9,42 @@ import { MorePromotion, PromotionalItem } from '../../interfaces/DashboardData'
 
 export class SearchOnBing extends Workers {
 
+    // async doSearchOnBing(page: Page, activity: MorePromotion | PromotionalItem) {
+    //     this.bot.log(this.bot.isMobile, 'SEARCH-ON-BING', 'Trying to complete SearchOnBing')
+    //
+    //     try {
+    //         await this.bot.utils.wait(5000)
+    //
+    //         await this.bot.browser.utils.tryDismissAllMessages(page)
+    //
+    //         const query = await this.getSearchQuery(activity.title)
+    //
+    //         const searchBar = '#sb_form_q'
+    //         const box = page.locator(searchBar)
+    //         await box.waitFor({ state: 'attached', timeout: 15000 })
+    //         await this.bot.browser.utils.tryDismissAllMessages(page)
+    //         await this.bot.utils.wait(200)
+    //         try {
+    //             await box.focus({ timeout: 2000 }).catch(() => { /* ignore */ })
+    //             await box.fill('')
+    //             await this.bot.utils.wait(200)
+    //             await page.keyboard.type(query, { delay: 20 })
+    //             await page.keyboard.press('Enter')
+    //         } catch {
+    //             const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`
+    //             await page.goto(url)
+    //         }
+    //         await this.bot.utils.wait(3000)
+    //
+    //         await page.close()
+    //
+    //         this.bot.log(this.bot.isMobile, 'SEARCH-ON-BING', 'Completed the SearchOnBing successfully')
+    //     } catch (error) {
+    //         await page.close()
+    //         this.bot.log(this.bot.isMobile, 'SEARCH-ON-BING', 'An error occurred:' + error, 'error')
+    //     }
+    // }
+
     async doSearchOnBing(page: Page, activity: MorePromotion | PromotionalItem) {
         this.bot.log(this.bot.isMobile, 'SEARCH-ON-BING', 'Trying to complete SearchOnBing')
 

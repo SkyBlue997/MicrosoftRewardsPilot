@@ -42,7 +42,8 @@ export async function getUserAgent(isMobile: boolean) {
 export async function getChromeVersion(isMobile: boolean): Promise<string> {
     try {
         const request = {
-            url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
+            // url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
+            url: 'https://ghproxy.monkeyray.net/https://raw.githubusercontent.com/GoogleChromeLabs/chrome-for-testing/main/data/last-known-good-versions.json',
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json'
@@ -54,7 +55,8 @@ export async function getChromeVersion(isMobile: boolean): Promise<string> {
         return data.channels.Stable.version
 
     } catch (error) {
-        throw log(isMobile, 'USERAGENT-CHROME-VERSION', 'An error occurred:' + error, 'error')
+        log(isMobile, 'USERAGENT-CHROME-VERSION', 'An error occurred:' + error, 'error')
+        throw new Error('An error occurred:' + error)
     }
 }
 
@@ -78,7 +80,8 @@ export async function getEdgeVersions(isMobile: boolean) {
 
 
     } catch (error) {
-        throw log(isMobile, 'USERAGENT-EDGE-VERSION', 'An error occurred:' + error, 'error')
+        log(isMobile, 'USERAGENT-EDGE-VERSION', 'An error occurred:' + error, 'error')
+        throw new Error('An error occurred:' + error)
     }
 }
 
@@ -185,6 +188,7 @@ export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprint
 
         return fingerprint
     } catch (error) {
-        throw log(isMobile, 'USER-AGENT-UPDATE', 'An error occurred:' + error, 'error')
+        log(isMobile, 'USER-AGENT-UPDATE', 'An error occurred:' + error, 'error')
+        throw new Error('An error occurred:' + error)
     }
 }
