@@ -402,6 +402,8 @@ export class PopupHandler {
      */
     clearHandledPopups(): void {
         this.handledPopups.clear()
+        this.processingCount = 0
+        this.lastProcessingTime = 0
     }
     
     /**

@@ -54,7 +54,7 @@ class Browser {
     /**
      * 根据地理位置获取浏览器配置
      */
-    private async getGeoLocationConfig(): Promise<{
+    private async getGeoLocationConfig(proxy: AccountProxy): Promise<{
         locale: string
         timezoneId: string
         geolocation: { latitude: number; longitude: number }
@@ -62,7 +62,7 @@ class Browser {
     }> {
         try {
             // 获取地理位置信息（包含真实的IP定位经纬度）
-            const location: GeoLocation = await GeoLanguageDetector.getCurrentLocation()
+            const location: GeoLocation = await GeoLanguageDetector.getCurrentLocation(proxy)
             
             // 根据国家代码获取语言设置
             const localeMap: Record<string, string> = {
@@ -176,7 +176,7 @@ class Browser {
 
     async createBrowser(proxy: AccountProxy, email: string): Promise<ManagedBrowser> {
         // 获取地理位置配置
-        const geoConfig = await this.getGeoLocationConfig()
+        const geoConfig = await this.getGeoLocationConfig(proxy)
 
         // 调试日志：确认headless配置
         this.bot.log(this.bot.isMobile, 'BROWSER-DEBUG', `Headless mode from config: ${this.bot.config.headless}`)

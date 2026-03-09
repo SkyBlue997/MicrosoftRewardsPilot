@@ -16,7 +16,8 @@ import Activities from '../functions/Activities'
 import { Account } from '../interfaces/Account'
 import { DashboardData } from '../interfaces/DashboardData'
 import Axios from '../utils/Axios'
-import { TwoFactorAuthRequiredError, AccountLockedError } from '../interfaces/Errors'
+import { StartupConfig } from '../utils/StartupConfig'
+import { TwoFactorAuthRequiredError, AccountLockedError, LoginTimeoutError } from '../interfaces/Errors'
 
 
 // Main bot class
@@ -36,6 +37,7 @@ export class MicrosoftRewardsBot {
     private pointsInitial: number = 0
 
     private activeWorkers: number
+    private activeManagedBrowsers: Map<string, Set<ManagedBrowser>> = new Map()
     private browserFactory: Browser = new Browser(this)
     private accounts: Account[]
     private workers: Workers
@@ -56,7 +58,7 @@ export class MicrosoftRewardsBot {
             utils: new BrowserUtil(this)
         }
         this.config = loadConfig()
-        this.activeWorkers = this.config.clusters
+        this.activeWorkers = 0
     }
 
     async initialize() {
@@ -88,6 +90,12 @@ export class MicrosoftRewardsBot {
         log('main', 'MAIN-PRIMARY', 'Primary process started')
 
         const accountChunks = this.utils.chunkArray(this.accounts, this.config.clusters)
+        this.activeWorkers = accountChunks.length
+
+        if (this.activeWorkers === 0) {
+            log('main', 'MAIN-PRIMARY', 'No account chunks to process. Exiting main process!')
+            process.exit(0)
+        }
 
         for (let i = 0; i < accountChunks.length; i++) {
             const worker = cluster.fork()
@@ -138,13 +146,40 @@ export class MicrosoftRewardsBot {
 
                 // 设置账户处理超时（30分钟）
                 const accountTimeout = this.utils.stringToMs(this.config.globalTimeout)
-                
-                await Promise.race([
-                    this.processAccount(account),
-                    new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Account processing timeout')), accountTimeout)
-                    )
-                ])
+
+                const accountTask = this.processAccount(account)
+                let timeoutHandle: NodeJS.Timeout | null = null
+                let didTimeout = false
+
+                try {
+                    await Promise.race([
+                        accountTask,
+                        new Promise<never>((_, reject) => {
+                            timeoutHandle = setTimeout(() => {
+                                didTimeout = true
+                                reject(new Error(`Account processing timeout after ${accountTimeout}ms`))
+                            }, accountTimeout)
+                        })
+                    ])
+                } catch (error) {
+                    if (didTimeout) {
+                        log('main', 'MAIN-TIMEOUT', `Timeout reached for ${account.email}, closing active resources...`, 'warn')
+                        await this.cleanupAccountResources(account.email)
+
+                        await Promise.race([
+                            accountTask.catch(taskError => {
+                                log('main', 'MAIN-TIMEOUT', `Timed-out account ${account.email} settled after cleanup: ${taskError}`, 'warn')
+                            }),
+                            this.utils.wait(10000)
+                        ])
+                    }
+
+                    throw error
+                } finally {
+                    if (timeoutHandle) {
+                        clearTimeout(timeoutHandle)
+                    }
+                }
 
                 completedAccounts++
                 log('main', 'MAIN-WORKER', `[${accountNumber}/${totalAccounts}] ✅ Completed tasks for account ${account.email}`, 'log', 'green')
@@ -219,8 +254,8 @@ export class MicrosoftRewardsBot {
 
         // 🎯 为新账户清理弹窗处理历史
         this.browser.utils.clearPopupHistory()
-        
-                    if (this.config.parallel) {
+
+        if (this.config.parallel) {
                 // 并行处理，但要分别处理错误
                 const results = await Promise.allSettled([
                     this.Desktop(account).catch(error => {
@@ -258,6 +293,8 @@ export class MicrosoftRewardsBot {
                     throw new Error('One or more parallel tasks failed')
                 }
             } else {
+                const taskFailures: string[] = []
+
                 // 顺序处理
                 try {
                     this.isMobile = false
@@ -265,7 +302,7 @@ export class MicrosoftRewardsBot {
                     log('main', 'MAIN-SUCCESS', `Desktop task completed for ${account.email}`, 'log', 'green')
                 } catch (error) {
                     log('main', 'MAIN-ERROR', `Desktop task failed for ${account.email}: ${error}`, 'error')
-                    // 继续执行Mobile任务，不因为Desktop失败而停止
+                    taskFailures.push(`Desktop task failed: ${error instanceof Error ? error.message : String(error)}`)
                 }
 
                 try {
@@ -279,10 +316,40 @@ export class MicrosoftRewardsBot {
                         // 不视为错误，继续处理下一个账户
                     } else {
                         log('main', 'MAIN-ERROR', `Mobile task failed for ${account.email}: ${error}`, 'error')
+                        taskFailures.push(`Mobile task failed: ${error instanceof Error ? error.message : String(error)}`)
                     }
-                    // 记录错误但不抛出，允许继续处理下一个账户
+                }
+
+                if (taskFailures.length > 0) {
+                    throw new Error(taskFailures.join(' | '))
                 }
             }
+    }
+
+    private registerManagedBrowser(managedBrowser: ManagedBrowser): void {
+        const browsers = this.activeManagedBrowsers.get(managedBrowser.email) ?? new Set<ManagedBrowser>()
+        browsers.add(managedBrowser)
+        this.activeManagedBrowsers.set(managedBrowser.email, browsers)
+    }
+
+    private unregisterManagedBrowser(managedBrowser: ManagedBrowser): void {
+        const browsers = this.activeManagedBrowsers.get(managedBrowser.email)
+        if (!browsers) {
+            return
+        }
+
+        browsers.delete(managedBrowser)
+        if (browsers.size === 0) {
+            this.activeManagedBrowsers.delete(managedBrowser.email)
+        }
+    }
+
+    private async closeManagedBrowser(managedBrowser: ManagedBrowser, saveSession = true): Promise<void> {
+        try {
+            await this.browser.func.closeBrowser(managedBrowser, saveSession)
+        } finally {
+            this.unregisterManagedBrowser(managedBrowser)
+        }
     }
 
     /**
@@ -291,6 +358,12 @@ export class MicrosoftRewardsBot {
     private async cleanupAccountResources(email: string): Promise<void> {
         try {
             log('main', 'CLEANUP', `Cleaning up resources for account ${email}`)
+
+            const activeBrowsers = Array.from(this.activeManagedBrowsers.get(email) ?? [])
+            if (activeBrowsers.length > 0) {
+                log('main', 'CLEANUP', `Closing ${activeBrowsers.length} active browser(s) for ${email}`)
+                await Promise.allSettled(activeBrowsers.map(browser => this.closeManagedBrowser(browser, false)))
+            }
 
             // 强制垃圾回收（如果可用）
             if (global.gc) {
@@ -321,15 +394,18 @@ export class MicrosoftRewardsBot {
     async Desktop(account: Account): Promise<void> {
         let managedBrowser: ManagedBrowser | null = null
         let workerPage
+        let sessionStable = false
 
         try {
             managedBrowser = await this.browserFactory.createBrowser(account.proxy, account.email)
+            this.registerManagedBrowser(managedBrowser)
             this.homePage = await managedBrowser.context.newPage()
 
             log(this.isMobile, 'MAIN', 'Starting desktop browser')
 
             // Login into MS Rewards, then go to rewards homepage
             await this.login.login(this.homePage, account.email, account.password)
+            sessionStable = true
 
             await this.browser.func.goHome(this.homePage)
 
@@ -353,7 +429,8 @@ export class MicrosoftRewardsBot {
                 log(this.isMobile, 'MAIN', 'No points to earn and "runOnZeroPoints" is set to "false", stopping!', 'log', 'yellow')
 
                 // Close desktop browser
-                await this.browser.func.closeBrowser(managedBrowser)
+                await this.closeManagedBrowser(managedBrowser, sessionStable)
+                managedBrowser = null
                 return
             }
 
@@ -370,7 +447,8 @@ export class MicrosoftRewardsBot {
             await saveSessionData(this.config.sessionPath, managedBrowser.context, account.email, this.isMobile)
 
             // Close desktop browser
-            await this.browser.func.closeBrowser(managedBrowser)
+            await this.closeManagedBrowser(managedBrowser, true)
+            managedBrowser = null
 
         } catch (error) {
             log(this.isMobile, 'DESKTOP-ERROR', `Desktop task failed for ${account.email}: ${error}`, 'error')
@@ -386,7 +464,8 @@ export class MicrosoftRewardsBot {
 
             if (managedBrowser) {
                 try {
-                    await this.browser.func.closeBrowser(managedBrowser)
+                    await this.closeManagedBrowser(managedBrowser, sessionStable)
+                    managedBrowser = null
                 } catch (closeError) {
                     log(this.isMobile, 'DESKTOP-CLEANUP', `Failed to close managed browser: ${closeError}`, 'error')
                 }
@@ -446,118 +525,131 @@ export class MicrosoftRewardsBot {
         const maxRetries = this.config.searchSettings?.retryMobileSearchAmount !== undefined
             ? this.config.searchSettings.retryMobileSearchAmount
             : 2
-        let managedBrowser: ManagedBrowser | null = null
+        for (let attempt = retryCount; attempt <= maxRetries; attempt++) {
+            let managedBrowser: ManagedBrowser | null = null
+            let sessionStable = false
 
-        try {
-            managedBrowser = await this.browserFactory.createBrowser(account.proxy, account.email)
-            this.homePage = await managedBrowser.context.newPage()
+            try {
+                managedBrowser = await this.browserFactory.createBrowser(account.proxy, account.email)
+                this.registerManagedBrowser(managedBrowser)
+                this.homePage = await managedBrowser.context.newPage()
 
-            log(this.isMobile, 'MAIN', `Starting mobile browser (attempt ${retryCount + 1}/${maxRetries + 1})`)
+                log(this.isMobile, 'MAIN', `Starting mobile browser (attempt ${attempt + 1}/${maxRetries + 1})`)
 
-            // Login into MS Rewards, then go to rewards homepage
-            await this.login.login(this.homePage, account.email, account.password)
-            this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
+                // Login into MS Rewards, then go to rewards homepage
+                await this.login.login(this.homePage, account.email, account.password)
+                sessionStable = true
+                this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
 
-            await this.browser.func.goHome(this.homePage)
+                await this.browser.func.goHome(this.homePage)
 
-            const data = await this.browser.func.getDashboardData()
+                const data = await this.browser.func.getDashboardData()
+                this.pointsInitial = data.userStatus.availablePoints
 
-            const browserEnarablePoints = await this.browser.func.getBrowserEarnablePoints()
-            const appEarnablePoints = await this.browser.func.getAppEarnablePoints(this.accessToken)
+                const browserEnarablePoints = await this.browser.func.getBrowserEarnablePoints()
+                const appEarnablePoints = await this.browser.func.getAppEarnablePoints(this.accessToken)
 
-            this.pointsCanCollect = browserEnarablePoints.mobileSearchPoints + appEarnablePoints.totalEarnablePoints
+                this.pointsCanCollect = browserEnarablePoints.mobileSearchPoints + appEarnablePoints.totalEarnablePoints
 
-            log(this.isMobile, 'MAIN-POINTS', `You can earn ${this.pointsCanCollect} points today (Browser: ${browserEnarablePoints.mobileSearchPoints} points, App: ${appEarnablePoints.totalEarnablePoints} points)`)
+                log(this.isMobile, 'MAIN-POINTS', `You can earn ${this.pointsCanCollect} points today (Browser: ${browserEnarablePoints.mobileSearchPoints} points, App: ${appEarnablePoints.totalEarnablePoints} points)`)
 
-            // If runOnZeroPoints is false and 0 points to earn, don't continue
-            if (!this.config.runOnZeroPoints && this.pointsCanCollect === 0) {
-                log(this.isMobile, 'MAIN', 'No points to earn and "runOnZeroPoints" is set to "false", stopping!', 'log', 'yellow')
+                // If runOnZeroPoints is false and 0 points to earn, don't continue
+                if (!this.config.runOnZeroPoints && this.pointsCanCollect === 0) {
+                    log(this.isMobile, 'MAIN', 'No points to earn and "runOnZeroPoints" is set to "false", stopping!', 'log', 'yellow')
+                    return
+                }
 
-                // Close mobile browser
-                if (managedBrowser) await this.browser.func.closeBrowser(managedBrowser)
+                // Do daily check in
+                if (this.config.workers.doDailyCheckIn) {
+                    try {
+                        log(this.isMobile, 'MOBILE-TASK', 'Starting Daily Check-In...')
+                        await this.activities.doDailyCheckIn(this.accessToken, data)
+                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Daily Check-In')
+                    } catch (error) {
+                        log(this.isMobile, 'MOBILE-TASK', `❌ Daily Check-In failed: ${error}`, 'error')
+                    }
+                } else {
+                    log(this.isMobile, 'MOBILE-TASK', 'Daily Check-In disabled in config')
+                }
+
+                // Do read to earn
+                if (this.config.workers.doReadToEarn) {
+                    try {
+                        log(this.isMobile, 'MOBILE-TASK', 'Starting Read to Earn...')
+                        await this.activities.doReadToEarn(this.accessToken, data)
+                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Read to Earn')
+                    } catch (error) {
+                        log(this.isMobile, 'MOBILE-TASK', `❌ Read to Earn failed: ${error}`, 'error')
+                    }
+                } else {
+                    log(this.isMobile, 'MOBILE-TASK', 'Read to Earn disabled in config')
+                }
+
+                let remainingMobileSearchPoints = 0
+                if (this.config.workers.doMobileSearch) {
+                    try {
+                        log(this.isMobile, 'MOBILE-TASK', 'Starting Mobile Search...')
+                        remainingMobileSearchPoints = await this.performMobileSearches(managedBrowser.context, data)
+                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Mobile Search')
+                    } catch (error) {
+                        log(this.isMobile, 'MOBILE-TASK', `❌ Mobile Search failed: ${error}`, 'error')
+                        throw error
+                    }
+                } else {
+                    log(this.isMobile, 'MOBILE-TASK', 'Mobile Search disabled in config')
+                }
+
+                const afterPointAmount = await this.browser.func.getCurrentPoints()
+
+                log(this.isMobile, 'MAIN-POINTS', `The script collected ${afterPointAmount - this.pointsInitial} points today`)
+
+                if (remainingMobileSearchPoints > 0) {
+                    if (attempt < maxRetries) {
+                        log(this.isMobile, 'MAIN', `Mobile search incomplete (attempt ${attempt + 1}/${maxRetries + 1}). Retrying with new browser...`, 'log', 'yellow')
+                        log(this.isMobile, 'MOBILE-SEARCH-RETRY', `${remainingMobileSearchPoints} points still need to be earned`, 'warn')
+                        await this.utils.wait(5000)
+                        continue
+                    }
+
+                    log(this.isMobile, 'MAIN', `Max retry limit of ${maxRetries + 1} reached. Mobile search may be incomplete.`, 'warn')
+                    log(this.isMobile, 'MOBILE-SEARCH-FINAL', `${remainingMobileSearchPoints} points were not earned after ${maxRetries + 1} attempts`, 'warn')
+                }
+
                 return
-            }
-
-            // Do daily check in
-            if (this.config.workers.doDailyCheckIn) {
-                try {
-                    log(this.isMobile, 'MOBILE-TASK', 'Starting Daily Check-In...')
-                await this.activities.doDailyCheckIn(this.accessToken, data)
-                    log(this.isMobile, 'MOBILE-TASK', '✅ Completed Daily Check-In')
-                } catch (error) {
-                    log(this.isMobile, 'MOBILE-TASK', `❌ Daily Check-In failed: ${error}`, 'error')
+            } catch (error) {
+                // 特殊处理OAuth授权超时错误
+                if (error instanceof LoginTimeoutError || (error instanceof Error && error.message.includes('OAuth authorization timeout'))) {
+                    log(this.isMobile, 'MOBILE-OAUTH', `OAuth timeout for ${account.email}: ${error.message}`, 'warn')
+                    log(this.isMobile, 'MOBILE-OAUTH', 'Mobile task requires user interaction - skipping', 'warn')
+                    throw new TwoFactorAuthRequiredError('Mobile OAuth requires user interaction - skipping mobile tasks for this account')
                 }
-            } else {
-                log(this.isMobile, 'MOBILE-TASK', 'Daily Check-In disabled in config')
-            }
 
-            // Do read to earn
-            if (this.config.workers.doReadToEarn) {
-                try {
-                    log(this.isMobile, 'MOBILE-TASK', 'Starting Read to Earn...')
-                await this.activities.doReadToEarn(this.accessToken, data)
-                    log(this.isMobile, 'MOBILE-TASK', '✅ Completed Read to Earn')
-                } catch (error) {
-                    log(this.isMobile, 'MOBILE-TASK', `❌ Read to Earn failed: ${error}`, 'error')
+                // 特殊处理2FA相关错误，直接重新抛出
+                if (error instanceof TwoFactorAuthRequiredError || error instanceof AccountLockedError) {
+                    throw error
                 }
-            } else {
-                log(this.isMobile, 'MOBILE-TASK', 'Read to Earn disabled in config')
-            }
 
-            // Do mobile searches
-            if (this.config.workers.doMobileSearch) {
-                try {
-                    log(this.isMobile, 'MOBILE-TASK', 'Starting Mobile Search...')
-                await this.performMobileSearches(managedBrowser.context, data, account, retryCount, maxRetries)
-                    log(this.isMobile, 'MOBILE-TASK', '✅ Completed Mobile Search')
-                } catch (error) {
-                    log(this.isMobile, 'MOBILE-TASK', `❌ Mobile Search failed: ${error}`, 'error')
-                }
-            } else {
-                log(this.isMobile, 'MOBILE-TASK', 'Mobile Search disabled in config')
-            }
-
-            const afterPointAmount = await this.browser.func.getCurrentPoints()
-
-            log(this.isMobile, 'MAIN-POINTS', `The script collected ${afterPointAmount - this.pointsInitial} points today`)
-
-            // Close mobile browser
-            await this.browser.func.closeBrowser(managedBrowser)
-
-        } catch (error) {
-            // 确保浏览器被清理
-            if (managedBrowser) {
-                try {
-                    await this.browser.func.closeBrowser(managedBrowser)
-                } catch (closeError) {
-                    log(this.isMobile, 'MOBILE-CLEANUP', `Failed to close managed browser: ${closeError}`, 'error')
-                }
-            }
-            
-            // 特殊处理OAuth授权超时错误
-            if (error instanceof Error && error.message.includes('OAuth authorization timeout')) {
-                log(this.isMobile, 'MOBILE-OAUTH', `OAuth timeout for ${account.email}: ${error.message}`, 'warn')
-                log(this.isMobile, 'MOBILE-OAUTH', 'Mobile task requires user interaction - skipping', 'warn')
-                throw new TwoFactorAuthRequiredError('Mobile OAuth requires user interaction - skipping mobile tasks for this account')
-            }
-            
-            // 特殊处理2FA相关错误，直接重新抛出
-            if (error instanceof TwoFactorAuthRequiredError || error instanceof AccountLockedError) {
                 throw error
+            } finally {
+                if (managedBrowser) {
+                    try {
+                        await this.closeManagedBrowser(managedBrowser, sessionStable)
+                    } catch (closeError) {
+                        log(this.isMobile, 'MOBILE-CLEANUP', `Failed to close managed browser in finally: ${closeError}`, 'error')
+                    }
+                }
             }
-            
-            throw error
         }
     }
 
     /**
      * 执行Mobile搜索任务
      */
-    private async performMobileSearches(browser: BrowserContext, data: DashboardData, account: Account, retryCount: number, maxRetries: number): Promise<void> {
+    private async performMobileSearches(browser: BrowserContext, data: DashboardData): Promise<number> {
         // If no mobile searches data found, stop (Does not always exist on new accounts)
         if (!data.userStatus.counters.mobileSearch) {
             log(this.isMobile, 'MAIN', 'Unable to fetch search points, your account is most likely too "new" for this! Try again later!', 'warn')
-            return
+            return 0
         }
 
         // 记录初始搜索积分状态
@@ -593,34 +685,14 @@ export class MicrosoftRewardsBot {
                 // 检查是否还有剩余积分
                 if (remainingPoints > 0) {
                     // 如果重试次数为0，直接报告完成状态而不重试
-                    if (maxRetries === 0) {
-                        log(this.isMobile, 'MOBILE-SEARCH-INCOMPLETE', `Mobile search incomplete: ${remainingPoints} points remaining, but retries disabled (retryMobileSearchAmount: 0)`, 'warn')
-                        log(this.isMobile, 'MOBILE-SEARCH-SUGGESTION', 'To enable retries, set "retryMobileSearchAmount" to a value > 0 in config.json', 'warn')
-                        return
-                    }
-
-                    // 如果还在重试范围内
-                if (retryCount < maxRetries) {
-                    log(this.isMobile, 'MAIN', `Mobile search incomplete (attempt ${retryCount + 1}/${maxRetries + 1}). Retrying with new browser...`, 'log', 'yellow')
-                        log(this.isMobile, 'MOBILE-SEARCH-RETRY', `${remainingPoints} points still need to be earned`, 'warn')
-
-                    // Browser will be closed in finally block
-
-                    // Wait a bit before retry
-                    await this.utils.wait(5000)
-
-                    // Retry with new instance (but limit recursion depth)
-                    await this.Mobile(account, retryCount + 1)
-                        return
-                    } else {
-                        log(this.isMobile, 'MAIN', `Max retry limit of ${maxRetries + 1} reached. Mobile search may be incomplete.`, 'warn')
-                        log(this.isMobile, 'MOBILE-SEARCH-FINAL', `${remainingPoints} points were not earned after ${maxRetries + 1} attempts`, 'warn')
-                    }
+                    return remainingPoints
                 } else {
                     log(this.isMobile, 'MAIN', 'Mobile searches completed successfully - all points earned!', 'log', 'green')
+                    return 0
                 }
             } else {
                 log(this.isMobile, 'MOBILE-SEARCH-ERROR', 'Unable to verify mobile search completion - no mobile search data found', 'warn')
+                return 0
             }
 
         } catch (error) {
@@ -644,13 +716,11 @@ export class MicrosoftRewardsBot {
 
 async function main() {
     const rewardsBot = new MicrosoftRewardsBot(false)
-
-    try {
-        await rewardsBot.initialize()
-        await rewardsBot.run()
-    } catch (error) {
-        log(false, 'MAIN-ERROR', `Error running desktop bot: ${error}`, 'error')
+    if (cluster.isPrimary) {
+        await StartupConfig.initialize()
     }
+    await rewardsBot.initialize()
+    await rewardsBot.run()
 }
 
 // Start the bots

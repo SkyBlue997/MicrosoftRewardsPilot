@@ -3,6 +3,7 @@
  * 验证修复措施是否有效防止无限循环
  */
 
+const assert = require('node:assert/strict');
 const { PopupHandler } = require('../dist/src/anti-detection/popup-handler.js');
 
 // 模拟有问题的页面对象
@@ -10,6 +11,13 @@ class ProblematicMockPage {
     constructor() {
         this.detectionCount = 0;
         this.url = () => 'https://rewards.bing.com/test';
+        this.keyboard = {
+            press: async (key) => {
+                if (key === 'Escape') {
+                    throw new Error('ESC key failed');
+                }
+            }
+        };
     }
 
     async waitForSelector(selector, options = {}) {
@@ -34,19 +42,21 @@ class ProblematicMockPage {
         throw new Error('Element not found');
     }
 
-    async keyboard() {
-        return {
-            press: async (key) => {
-                if (key === 'Escape') {
-                    // 模拟ESC键也失败
-                    throw new Error('ESC key failed');
-                }
-            }
-        };
-    }
-
     async waitForTimeout(ms) {
         return new Promise(resolve => setTimeout(resolve, Math.min(ms, 10)));
+    }
+}
+
+class SlowMockPage extends ProblematicMockPage {
+    async waitForSelector(selector) {
+        this.detectionCount++;
+
+        if (selector.includes('streak')) {
+            await new Promise(resolve => setTimeout(resolve, 1200));
+            return null;
+        }
+
+        throw new Error('Element not found');
     }
 }
 
@@ -72,6 +82,8 @@ async function testInfiniteLoopFix() {
     console.log(`结果: ${result1 ? '❌ 意外处理' : '✅ 正确跳过'}`);
     console.log(`耗时: ${duration1}ms`);
     console.log(`检测次数: ${page1.detectionCount}\n`);
+    assert.equal(result1, false, '默认禁用时不应处理弹窗');
+    assert.equal(page1.detectionCount, 0, '默认禁用时不应进行检测');
 
     // 测试2: 启用状态下的紧急停止机制
     console.log('📋 测试2: 紧急停止机制');
@@ -102,14 +114,25 @@ async function testInfiniteLoopFix() {
     console.log(`结果: ${emergencyStopTriggered ? '✅ 紧急停止生效' : '❌ 紧急停止失效'}`);
     console.log(`总耗时: ${duration2}ms`);
     console.log(`总检测次数: ${page2.detectionCount}\n`);
+    assert.equal(emergencyStopTriggered, true, '连续调用时应触发紧急停止');
 
     // 测试3: 超时保护机制
     console.log('📋 测试3: 超时保护机制');
-    
-    // 重置处理器状态
+
+    // 重置处理器状态并使用慢速页面，确保命中单次处理超时逻辑
     handler.clearHandledPopups();
-    
-    const page3 = new ProblematicMockPage();
+
+    handler.setConfig({
+        popupHandling: {
+            enabled: true,
+            handleReferralPopups: false,
+            handleStreakProtectionPopups: true,
+            handleStreakRestorePopups: false,
+            handleGenericModals: false
+        }
+    });
+
+    const page3 = new SlowMockPage();
     const startTime3 = Date.now();
     const result3 = await handler.handleAllPopups(page3, 'TEST-TIMEOUT');
     const duration3 = Date.now() - startTime3;
@@ -117,6 +140,10 @@ async function testInfiniteLoopFix() {
     console.log(`结果: ${duration3 < 15000 ? '✅ 超时保护生效' : '❌ 超时保护失效'}`);
     console.log(`耗时: ${duration3}ms (应该 < 15秒)`);
     console.log(`检测次数: ${page3.detectionCount}\n`);
+    assert.equal(result3, false, '超时保护场景不应误报成功');
+    assert.ok(page3.detectionCount > 0, '超时保护测试应实际执行过选择器检测');
+    assert.ok(duration3 >= 9000, '超时保护测试应接近单次处理超时阈值');
+    assert.ok(duration3 < 15000, '超时保护应在 15 秒内结束');
 
     // 测试4: 选择器安全性
     console.log('📋 测试4: 安全选择器测试');
@@ -153,7 +180,10 @@ async function testInfiniteLoopFix() {
 
 // 运行测试
 if (require.main === module) {
-    testInfiniteLoopFix().catch(console.error);
+    testInfiniteLoopFix().catch(error => {
+        console.error(error);
+        process.exit(1);
+    });
 }
 
 module.exports = { testInfiniteLoopFix };

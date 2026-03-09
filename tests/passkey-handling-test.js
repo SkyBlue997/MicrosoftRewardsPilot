@@ -3,6 +3,8 @@
  * 验证Passkey检测和绕过功能
  */
 
+const assert = require('node:assert/strict');
+
 // 模拟Login类的Passkey处理方法
 class MockLogin {
     constructor(config = {}) {
@@ -56,6 +58,10 @@ class MockLogin {
             if (page.elements && page.elements[selector]) {
                 this.bot.log(false, 'LOGIN-PASSKEY', `Found skip button: ${selector}`);
                 page.elements[selector].clicked = true;
+                if (page.scenario !== 'passkey-loop') {
+                    page.pageUrl = 'https://rewards.bing.com';
+                    page.content = 'Microsoft Rewards Dashboard';
+                }
                 return true;
             }
         }
@@ -64,6 +70,8 @@ class MockLogin {
         if (page.allowEsc) {
             this.bot.log(false, 'LOGIN-PASSKEY', 'Trying ESC key to skip Passkey setup');
             page.escPressed = true;
+            page.pageUrl = 'https://rewards.bing.com';
+            page.content = 'Microsoft Rewards Dashboard';
             return true;
         }
         
@@ -71,6 +79,8 @@ class MockLogin {
         if (page.allowNavigation) {
             this.bot.log(false, 'LOGIN-PASSKEY', 'Attempting direct navigation to rewards page');
             page.navigatedTo = 'https://rewards.bing.com';
+            page.pageUrl = page.navigatedTo;
+            page.content = 'Microsoft Rewards Dashboard';
             return true;
         }
         
@@ -202,6 +212,7 @@ async function testPasskeyHandling() {
     
     const result1 = await login1.handlePasskeySetupLoop(page1);
     console.log(`结果: ${result1 ? '❌ 意外处理' : '✅ 正确跳过'}\n`);
+    assert.equal(result1, false, '正常页面不应触发 Passkey 处理');
 
     // 测试2: Passkey页面 - 跳过按钮成功
     console.log('📋 测试2: Passkey页面 - 跳过按钮');
@@ -213,6 +224,8 @@ async function testPasskeyHandling() {
     const result2 = await login2.handlePasskeySetupLoop(page2);
     console.log(`结果: ${result2 ? '✅ 成功跳过' : '❌ 跳过失败'}`);
     console.log(`跳过按钮被点击: ${page2.elements['[data-testid="secondaryButton"]']?.clicked ? '✅' : '❌'}\n`);
+    assert.equal(result2, true, '跳过按钮场景应成功绕过 Passkey');
+    assert.equal(page2.elements['[data-testid="secondaryButton"]']?.clicked, true, '跳过按钮应被点击');
 
     // 测试3: Passkey页面 - ESC键成功
     console.log('📋 测试3: Passkey页面 - ESC键');
@@ -224,6 +237,8 @@ async function testPasskeyHandling() {
     const result3 = await login3.handlePasskeySetupLoop(page3);
     console.log(`结果: ${result3 ? '✅ 成功跳过' : '❌ 跳过失败'}`);
     console.log(`ESC键被按下: ${page3.escPressed ? '✅' : '❌'}\n`);
+    assert.equal(result3, true, 'ESC 备选方案应成功绕过 Passkey');
+    assert.equal(page3.escPressed, true, 'ESC 应被触发');
 
     // 测试4: Passkey页面 - 直接导航
     console.log('📋 测试4: Passkey页面 - 直接导航');
@@ -235,6 +250,8 @@ async function testPasskeyHandling() {
     const result4 = await login4.handlePasskeySetupLoop(page4);
     console.log(`结果: ${result4 ? '✅ 成功跳过' : '❌ 跳过失败'}`);
     console.log(`导航到: ${page4.navigatedTo || '无'}\n`);
+    assert.equal(result4, true, '直接导航备选应成功绕过 Passkey');
+    assert.equal(page4.navigatedTo, 'https://rewards.bing.com', '应导航到 Rewards 页面');
 
     // 测试5: 配置禁用
     console.log('📋 测试5: 配置禁用Passkey处理');
@@ -245,6 +262,7 @@ async function testPasskeyHandling() {
     
     const result5 = await login5.handlePasskeySetupLoop(page5);
     console.log(`结果: ${result5 ? '❌ 意外处理' : '✅ 正确跳过'}\n`);
+    assert.equal(result5, false, '禁用配置时不应处理 Passkey');
 
     // 测试6: 最大尝试次数
     console.log('📋 测试6: 最大尝试次数限制');
@@ -259,6 +277,8 @@ async function testPasskeyHandling() {
     
     console.log(`结果: ${result6 ? '❌ 意外成功' : '✅ 正确失败'}`);
     console.log(`耗时: ${duration}ms (应该很快完成)\n`);
+    assert.equal(result6, false, '无法绕过的循环场景应最终失败');
+    assert.ok(duration < 1000, '最大尝试次数限制应快速结束');
 
     console.log('🎉 Passkey处理功能测试完成！');
     
@@ -274,7 +294,10 @@ async function testPasskeyHandling() {
 
 // 运行测试
 if (require.main === module) {
-    testPasskeyHandling().catch(console.error);
+    testPasskeyHandling().catch(error => {
+        console.error(error);
+        process.exit(1);
+    });
 }
 
 module.exports = { testPasskeyHandling };

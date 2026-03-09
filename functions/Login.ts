@@ -9,12 +9,7 @@ import { HumanBehaviorSimulator } from '../src/anti-detection/human-behavior'
 import { NextGenAntiDetectionController } from '../src/anti-detection/next-gen-controller'
 
 import { OAuth } from '../interfaces/OAuth'
-
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-})
+import { AccountLockedError, LoginTimeoutError } from '../interfaces/Errors'
 
 export class Login {
     private bot: MicrosoftRewardsBot
@@ -36,6 +31,20 @@ export class Login {
         this.nextGenController = new NextGenAntiDetectionController()
         // Ensure variable is recognized as used
         void this.nextGenController
+    }
+
+    private async promptForInput(question: string): Promise<string> {
+        return await new Promise<string>((resolve) => {
+            const prompt = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            })
+
+            prompt.question(question, (input) => {
+                prompt.close()
+                resolve(input)
+            })
+        })
     }
 
     async login(page: Page, email: string, password: string) {
@@ -64,7 +73,6 @@ export class Login {
 
             if (!isLoggedIn) {
                 await this.execLogin(page, email, password)
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Logged into Microsoft successfully')
             } else {
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Already logged in')
 
@@ -84,7 +92,7 @@ export class Login {
         } catch (error) {
             // Throw and don't continue
             this.bot.log(this.bot.isMobile, 'LOGIN', 'An error occurred:' + error, 'error')
-            throw new Error('An error occurred:' + error)
+            throw error
         }
     }
 
@@ -114,6 +122,7 @@ export class Login {
             await this.checkLoggedIn(page)
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', 'An error occurred: ' + error, 'error')
+            throw error
         }
     }
 
@@ -124,8 +133,14 @@ export class Login {
             // Wait for email field
             const emailField = await page.waitForSelector(emailInputSelector, { state: 'visible', timeout: 2000 }).catch(() => null)
             if (!emailField) {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Email field not found', 'warn')
-                return
+                const emailPrefilled = await page.waitForSelector('#userDisplayName', { timeout: 1000 }).catch(() => null)
+                const passwordField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 1000 }).catch(() => null)
+                if (emailPrefilled || passwordField) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN', 'Email step already completed by Microsoft')
+                    return
+                }
+
+                throw new Error('Email field not found')
             }
 
             await this.bot.utils.wait(1000)
@@ -156,11 +171,18 @@ export class Login {
                 await this.bot.utils.wait(2000)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Email entered successfully')
             } else {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Next button not found after email entry', 'warn')
+                const passwordField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 2000 }).catch(() => null)
+                if (passwordField) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN', 'Email step advanced without explicit next button')
+                    return
+                }
+
+                throw new Error('Next button not found after email entry')
             }
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Email entry failed: ${error}`, 'error')
+            throw error
         }
     }
 
@@ -214,12 +236,21 @@ export class Login {
                 await this.bot.utils.wait(2000)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Password entered successfully')
             } else {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Next button not found after password entry', 'warn')
+                const loginProgressed = await Promise.race([
+                    page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('input[name="otc"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('input[name="proofconfirmation"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('#displaySign, [data-testid="displaySign"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)
+                ])
+
+                if (!loginProgressed) {
+                    throw new Error('Next button not found after password entry')
+                }
             }
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Password entry failed: ${error}`, 'error')
-                await this.handle2FA(page)
+            throw error
         }
     }
 
@@ -315,13 +346,8 @@ export class Login {
 
     private async authEmailVerification(page: Page) {
         this.bot.log(this.bot.isMobile, 'LOGIN', 'Email verification required. Please check your email and enter the code.')
-        
-        const code = await new Promise<string>((resolve) => {
-            rl.question('Enter email verification code:\n', (input) => {
-                rl.close()
-                resolve(input)
-            })
-        })
+
+        const code = await this.promptForInput('Enter email verification code:\n')
 
         await page.fill('input[name="proofconfirmation"]', code)
         await page.keyboard.press('Enter')
@@ -418,12 +444,7 @@ export class Login {
     private async authSMSVerification(page: Page) {
         this.bot.log(this.bot.isMobile, 'LOGIN', 'SMS 2FA code required. Waiting for user input...')
 
-        const code = await new Promise<string>((resolve) => {
-            rl.question('Enter 2FA code:\n', (input) => {
-                rl.close()
-                resolve(input)
-            })
-        })
+        const code = await this.promptForInput('Enter 2FA code:\n')
 
         await page.fill('input[name="otc"]', code)
         await page.keyboard.press('Enter')
@@ -497,6 +518,7 @@ export class Login {
         let code: string
 
         const authStart = Date.now()
+        const maxWaitMs = Number(process.env.MOBILE_OAUTH_TIMEOUT_MS || 180000)
         this.bot.log(this.bot.isMobile, 'LOGIN-APP', 'Waiting for authorization...')
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -510,6 +532,11 @@ export class Login {
             currentUrl = new URL(page.url())
             // Shorter wait to react faster to passkey prompt
             await this.bot.utils.wait(1000)
+
+            const elapsed = Date.now() - authStart
+            if (elapsed > maxWaitMs) {
+                throw new LoginTimeoutError(`OAuth authorization timeout after ${Math.round(elapsed / 1000)}s`)
+            }
         }
 
         const body = new URLSearchParams()
@@ -884,6 +911,7 @@ export class Login {
             await page.goto('https://www.bing.com/fd/auth/signin?action=interactive&provider=windows_live_id&return_url=https%3A%2F%2Fwww.bing.com%2F')
 
             const maxIterations = 5
+            let verified = false
 
             for (let iteration = 1; iteration <= maxIterations; iteration++) {
                 const currentUrl = new URL(page.url())
@@ -892,9 +920,9 @@ export class Login {
                     await this.bot.browser.utils.tryDismissAllMessages(page)
 
                     const loggedIn = await this.checkBingLoginStatus(page)
-                    // If mobile browser, skip this step
                     if (loggedIn || this.bot.isMobile) {
                         this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'Bing login verification passed!')
+                        verified = true
                         break
                     }
                 }
@@ -902,8 +930,13 @@ export class Login {
                 await this.bot.utils.wait(1000)
             }
 
+            if (!verified) {
+                throw new Error('Bing login verification failed')
+            }
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'An error occurred:' + error, 'error')
+            throw error
         }
     }
 
@@ -921,7 +954,7 @@ export class Login {
         const isLocked = await page.waitForSelector('#serviceAbuseLandingTitle', { state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
         if (isLocked) {
             this.bot.log(this.bot.isMobile, 'CHECK-LOCKED', 'This account has been locked! Remove the account from "accounts.json" and restart!', 'error')
-            throw new Error('This account has been locked! Remove the account from "accounts.json" and restart!')
+            throw new AccountLockedError('This account has been locked! Remove the account from "accounts.json" and restart!')
         }
     }
 

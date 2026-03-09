@@ -621,10 +621,12 @@ export default class BrowserFunc {
         return selector
     }
 
-    async closeBrowser(managedBrowser: ManagedBrowser) {
+    async closeBrowser(managedBrowser: ManagedBrowser, saveSession = true) {
         try {
-            // Save cookies
-            await saveSessionData(this.bot.config.sessionPath, managedBrowser.context, managedBrowser.email, managedBrowser.isMobile)
+            if (saveSession) {
+                // Save cookies
+                await saveSessionData(this.bot.config.sessionPath, managedBrowser.context, managedBrowser.email, managedBrowser.isMobile)
+            }
 
             await this.bot.utils.wait(2000)
 

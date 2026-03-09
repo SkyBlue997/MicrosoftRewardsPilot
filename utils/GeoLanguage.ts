@@ -1,5 +1,6 @@
-import axios from 'axios'
 import { log } from './Logger'
+import AxiosClient from './Axios'
+import { AccountProxy } from '../interfaces/Account'
 
 // API响应接口定义
 interface IpapiCoResponse {
@@ -58,17 +59,27 @@ export interface LanguageConfig {
 }
 
 export class GeoLanguageDetector {
-    private static geoCache: GeoLocation | null = null
-    private static cacheExpiry: number = 0
+    private static geoCache: Map<string, { location: GeoLocation; expiresAt: number }> = new Map()
     private static CACHE_DURATION = 24 * 60 * 60 * 1000 // 24小时缓存
+    private static readonly DIRECT_CONNECTION_PROXY: AccountProxy = {
+        proxyAxios: false,
+        url: '',
+        port: 0,
+        password: '',
+        username: ''
+    }
 
     /**
      * 获取当前IP的地理位置信息
      */
-    static async getCurrentLocation(): Promise<GeoLocation> {
+    static async getCurrentLocation(proxy?: AccountProxy): Promise<GeoLocation> {
+        const proxyConfig = this.getGeoLookupProxy(proxy)
+        const cacheKey = this.getCacheKey(proxyConfig)
+
         // 检查缓存
-        if (this.geoCache && Date.now() < this.cacheExpiry) {
-            return this.geoCache
+        const cachedEntry = this.geoCache.get(cacheKey)
+        if (cachedEntry && Date.now() < cachedEntry.expiresAt) {
+            return cachedEntry.location
         }
 
         try {
@@ -79,15 +90,23 @@ export class GeoLanguageDetector {
                 'https://freegeoip.app/json/'
             ]
 
+            const axiosClient = new AxiosClient(proxyConfig)
+
             for (const service of geoServices) {
                 try {
-                    const response = await axios.get(service, { timeout: 10000 })  // 增加超时时间到10秒
+                    const response = await axiosClient.request({
+                        method: 'GET',
+                        timeout: 10000,
+                        url: service
+                    })
                     const location = this.parseLocationResponse(response.data, service)
                     
                     if (location) {
                         // 缓存结果
-                        this.geoCache = location
-                        this.cacheExpiry = Date.now() + this.CACHE_DURATION
+                        this.geoCache.set(cacheKey, {
+                            expiresAt: Date.now() + this.CACHE_DURATION,
+                            location
+                        })
                         
                         log(false, 'GEO-DETECT', `Location detected: ${location.country} (${location.countryCode}) - Language: ${location.language}`)
                         return location
@@ -105,6 +124,25 @@ export class GeoLanguageDetector {
             log(false, 'GEO-DETECT', `All geo services failed, using timezone fallback: ${error}`, 'warn')
             return this.getLocationFromTimezone()
         }
+    }
+
+    private static getGeoLookupProxy(proxy?: AccountProxy): AccountProxy {
+        if (!proxy?.url) {
+            return this.DIRECT_CONNECTION_PROXY
+        }
+
+        return {
+            ...proxy,
+            proxyAxios: true
+        }
+    }
+
+    private static getCacheKey(proxy: AccountProxy): string {
+        if (!proxy.url) {
+            return 'direct'
+        }
+
+        return `${proxy.url}:${proxy.port}:${proxy.username}`
     }
 
     /**
@@ -592,8 +630,7 @@ export class GeoLanguageDetector {
      * 清除缓存（用于测试）
      */
     static clearCache(): void {
-        this.geoCache = null
-        this.cacheExpiry = 0
+        this.geoCache.clear()
     }
 
     /**
@@ -771,4 +808,4 @@ export class GeoLanguageDetector {
             }
         }
     }
-} 
+}
