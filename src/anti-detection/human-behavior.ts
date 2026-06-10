@@ -13,10 +13,8 @@ export class HumanBehaviorSimulator {
      * 人类化鼠标移动
      */
     async humanMouseMove(page: Page, targetX: number, targetY: number): Promise<void> {
-        const currentPos = await page.evaluate(() => ({ 
-            x: (window as any).mouseX || 0,
-            y: (window as any).mouseY || 0
-        }))
+        // 以上次记录的位置为起点：实时页面上 window.mouseX/Y 永远是 0，addInitScript 也只会无效累积
+        const currentPos = this.mousePosition
         
         // 生成贝塞尔曲线路径
         const path = this.generateBezierPath(currentPos, { x: targetX, y: targetY })
@@ -31,7 +29,6 @@ export class HumanBehaviorSimulator {
         }
         
         // 更新鼠标位置追踪
-        await page.addInitScript(`window.mouseX = ${targetX}; window.mouseY = ${targetY};`)
         this.mousePosition = { x: targetX, y: targetY }
     }
     
@@ -149,8 +146,7 @@ export class HumanBehaviorSimulator {
         // 常见的打字错误模式
         const errorTypes = [
             () => this.adjacentKeyError(correctChar),
-            () => this.doubleKeyError(correctChar),
-            () => this.swapCharError(correctChar)
+            () => this.doubleKeyError(correctChar)
         ]
         
         const errorType = errorTypes[Math.floor(Math.random() * errorTypes.length)]
@@ -202,14 +198,6 @@ export class HumanBehaviorSimulator {
      */
     private doubleKeyError(char: string): string {
         return char + char
-    }
-    
-    /**
-     * 字符交换错误
-     */
-    private swapCharError(char: string): string {
-        // 这个需要在上下文中处理，这里返回空
-        return ''
     }
     
     /**

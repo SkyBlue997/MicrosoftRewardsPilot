@@ -5,20 +5,14 @@ import { Page } from 'rebrowser-playwright'
  * 统一处理所有类型的弹窗，确保机器人正常运行
  */
 export class PopupHandler {
-    private static instance: PopupHandler
     private handledPopups: Set<string> = new Set()
     private config: any = null
     private lastProcessingTime: number = 0
     private processingCount: number = 0
 
-    private constructor() {}
-
-    public static getInstance(): PopupHandler {
-        if (!PopupHandler.instance) {
-            PopupHandler.instance = new PopupHandler()
-        }
-        return PopupHandler.instance
-    }
+    // Per-BrowserUtil instance (no longer a process-wide singleton) so the concurrent
+    // desktop and mobile bots in parallel mode keep independent dedup/throttle state.
+    constructor() {}
 
     /**
      * 设置配置
@@ -365,6 +359,10 @@ export class PopupHandler {
                         if (closeButton) {
                             await closeButton.click()
                             await page.waitForTimeout(500) // 减少等待时间
+                            if (!(await this.isPopupGone(popupElement))) {
+                                console.log(`[${logPrefix}] ⚠️ Clicked close on ${popupType} but it is still visible, trying next option...`)
+                                continue
+                            }
                             console.log(`[${logPrefix}] 🎯 Closed ${popupType} using selector: ${selector} (attempt ${attempt})`)
                             return true
                         }
@@ -377,8 +375,11 @@ export class PopupHandler {
                 try {
                     await page.keyboard.press('Escape')
                     await page.waitForTimeout(500)
-                    console.log(`[${logPrefix}] 🎯 Closed ${popupType} using ESC key (attempt ${attempt})`)
-                    return true
+                    if (await this.isPopupGone(popupElement)) {
+                        console.log(`[${logPrefix}] 🎯 Closed ${popupType} using ESC key (attempt ${attempt})`)
+                        return true
+                    }
+                    console.log(`[${logPrefix}] ⚠️ Pressed ESC but ${popupType} still visible (attempt ${attempt})`)
                 } catch (error) {
                     // 继续下一次尝试
                 }
@@ -397,6 +398,18 @@ export class PopupHandler {
         return false
     }
     
+    /**
+     * 校验弹窗是否真正关闭（不再可见或已从 DOM 分离）
+     */
+    private async isPopupGone(popupElement: any): Promise<boolean> {
+        try {
+            return !(await popupElement.isVisible())
+        } catch {
+            // isVisible 抛错通常意味着元素句柄已分离 —— 弹窗已消失
+            return true
+        }
+    }
+
     /**
      * 清理已处理的弹窗记录（用于新会话）
      */

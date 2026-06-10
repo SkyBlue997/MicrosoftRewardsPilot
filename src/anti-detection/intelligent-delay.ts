@@ -3,6 +3,8 @@
  * 基于真实用户行为模式的非模式化延迟生成
  */
 export class IntelligentDelaySystem {
+    // 单次延迟上限，避免生活中断与多个倍率叠加后出现 >1 小时的极端等待
+    private static readonly MAX_SEARCH_DELAY_MS = 10 * 60_000
     private recentDelays: number[] = []
     private suspicionLevel: number = 0
     private lastActivityTime: number = 0
@@ -51,6 +53,9 @@ export class IntelligentDelaySystem {
         // 会话疲劳效应
         delay = this.applySessionFatigue(delay, searchIndex)
         
+        // 封顶单次延迟，避免极端等待拖垮运行时间预算
+        delay = Math.min(delay, IntelligentDelaySystem.MAX_SEARCH_DELAY_MS)
+
         this.recordDelay(delay)
         this.lastActivityTime = now
         

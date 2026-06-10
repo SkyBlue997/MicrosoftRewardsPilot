@@ -11,7 +11,7 @@ export default class BrowserUtil {
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
-        this.popupHandler = PopupHandler.getInstance()
+        this.popupHandler = new PopupHandler()
         // 传递配置给弹窗处理器
         this.popupHandler.setConfig(bot.config)
     }
