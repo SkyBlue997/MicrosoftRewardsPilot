@@ -157,8 +157,10 @@ export class HumanBehaviorSimulator {
             await page.keyboard.type(wrongChar)
             await page.waitForTimeout(100 + Math.random() * 200)
             
-            // 意识到错误，删除
-            await page.keyboard.press('Backspace')
+            // 意识到错误，删除（按错字长度逐个删除，避免 doubleKeyError 多打的字符残留而破坏凭据/查询）
+            for (let k = 0; k < wrongChar.length; k++) {
+                await page.keyboard.press('Backspace')
+            }
             await page.waitForTimeout(150 + Math.random() * 100)
         }
     }

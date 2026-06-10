@@ -270,10 +270,11 @@ export class Search extends Workers {
 
                 if (finalMissingPoints === 0) {
                     this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-VERIFY', '✅ Final verification: All search points earned successfully!')
-                } else {
-                    this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-VERIFY', `⚠️ Final verification: ${finalMissingPoints} points still missing after completion`, 'warn')
+                    break
                 }
-                break
+                // 最终校验仍有缺口（通常是中途取点失败导致的误判“完成”）——用真实值继续搜索而不是停止
+                this.bot.log(this.bot.isMobile, 'SEARCH-FINAL-VERIFY', `⚠️ Final verification: ${finalMissingPoints} points still missing, continuing searches`, 'warn')
+                missingPoints = finalMissingPoints
             }
 
             // 显示预计剩余时间
@@ -934,10 +935,6 @@ export class Search extends Workers {
                                     }
                                 }
 
-                                // 确保移动端UA检测
-                                if (!navigator.userAgent.includes('Mobile')) {
-                                    this.bot.log(this.bot.isMobile, 'MOBILE-VERIFY', 'User-Agent missing Mobile identifier!', 'error')
-                                }
                             })
                         }
 
@@ -1529,7 +1526,11 @@ export class Search extends Workers {
             const mappedTrendsData = trendsData.map(query => [query[0], query[9]!.slice(1)])
             if (mappedTrendsData.length < 90) {
                 this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'Insufficient search queries, falling back to JP', 'warn')
-                return this.getGoogleTrends()
+                if (geoLocale.toUpperCase() === 'JP') {
+                    this.bot.log(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'JP also returned insufficient queries, using partial set', 'warn')
+                } else {
+                    return this.getGoogleTrends('JP')
+                }
             }
 
             for (const [topic, relatedQueries] of mappedTrendsData) {

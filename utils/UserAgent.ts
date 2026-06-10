@@ -50,7 +50,7 @@ export async function getChromeVersion(isMobile: boolean): Promise<string> {
             }
         }
 
-        const response = await axios(request)
+        const response = await axios({ ...request, timeout: 10000 })
         const data: ChromeVersion = response.data
         return data.channels.Stable.version
 
@@ -70,7 +70,7 @@ export async function getEdgeVersions(isMobile: boolean) {
             }
         }
 
-        const response = await axios(request)
+        const response = await axios({ ...request, timeout: 10000 })
         const data: EdgeVersion[] = response.data
         const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
         return {

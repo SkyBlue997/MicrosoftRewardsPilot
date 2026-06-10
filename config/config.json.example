@@ -60,34 +60,6 @@
             "validateMatch": true,
             "logChanges": true
         },
-        "humanBehavior": {
-            "typingErrorRate": 0.12,
-            "thinkingPauseEnabled": true,
-            "randomScrollEnabled": true,
-            "clickRandomEnabled": true,
-            "timeBasedDelayEnabled": true,
-            "adaptiveDelayEnabled": true,
-            "cautionModeEnabled": true
-        },
-        "antiDetection": {
-            "ultraMode": true,
-            "stealthLevel": "ultimate",
-            "dynamicDelayMultiplier": 4.0,
-            "progressiveBackoff": true,
-            "maxConsecutiveFailures": 1,
-            "cooldownPeriod": "20min",
-            "sessionSimulation": true,
-            "multitaskingEnabled": true,
-            "behaviorRandomization": true,
-            "timeBasedScheduling": true,
-            "humanErrorSimulation": true,
-            "deepPageInteraction": true,
-            "canvasNoise": true,
-            "sensorDataInjection": true,
-            "networkBehaviorMimic": true,
-            "sessionBreaking": true,
-            "realUserErrors": true
-        },
         "chinaRegionAdaptation": {
             "enabled": false,
             "useBaiduTrends": true,

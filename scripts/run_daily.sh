@@ -9,6 +9,14 @@ export TZ=${TZ}
 # Change directory to the application directory
 cd /usr/src/microsoftrewardspilot
 
+# Prevent overlapping runs (cron can fire again while a previous run is still going).
+# Acquire a non-blocking exclusive lock; if another run already holds it, exit immediately.
+exec 9>/tmp/microsoftrewardspilot.lock
+if ! flock -n 9; then
+    echo "Another MicrosoftRewardsPilot run is already in progress, exiting."
+    exit 0
+fi
+
 # Define the minimum and maximum wait times in seconds
 MINWAIT=$((5*60))  # 5 minutes
 MAXWAIT=$((50*60)) # 50 minutes
