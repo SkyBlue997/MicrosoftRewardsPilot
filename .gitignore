@@ -7,3 +7,8 @@ notes
 *.log
 *.tmp
 .env
+# Local per-user config holding real credentials/secrets (keep only the .example templates in git)
+config/accounts.json
+config/accounts.dev.json
+config/config.json
+config/config.dev.json

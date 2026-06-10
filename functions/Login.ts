@@ -387,7 +387,7 @@ export class Login {
             
             if (element) {
                 const code = await element.textContent()
-                this.bot.log(this.bot.isMobile, 'LOGIN', `2FA code found: ${code}`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `2FA code found: ${code}`)
                 return code
             }
             
@@ -426,7 +426,7 @@ export class Login {
         // eslint-disable-next-line no-constant-condition
         while (true) {
             try {
-                this.bot.log(this.bot.isMobile, 'LOGIN', `Press the number ${numberToPress} on your Authenticator app to approve the login`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `Press the number ${numberToPress} on your Authenticator app to approve the login`)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'If you press the wrong number or the "DENY" button, try again in 60 seconds')
 
                 await page.waitForSelector('form[name="f1"]', { state: 'detached', timeout: 60000 })
@@ -1007,7 +1007,7 @@ export class Login {
                     // Authenticator App验证
                     const code = await foundElement.textContent()
                     if (code && code.trim()) {
-                        this.bot.log(this.bot.isMobile, 'LOGIN-MOBILE-2FA', `Found Authenticator code on mobile: ${code}`)
+                        this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `Found Authenticator code on mobile: ${code}`)
                         
                         // 检查是否与桌面端代码冲突
                         if (this.bot.config.parallel) {

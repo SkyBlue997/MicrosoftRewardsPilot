@@ -30,7 +30,10 @@ export class ABC extends Workers {
                 await page.waitForSelector('.wk_OptionClickClass', { state: 'visible', timeout: 10000 })
 
                 const answers = $('.wk_OptionClickClass')
-                const answer = answers[this.bot.utils.randomNumber(0, 2)]?.attribs['id']
+                const answer = answers[this.bot.utils.randomNumber(0, answers.length - 1)]?.attribs['id']
+                if (!answer) {
+                    throw new Error('No answer option found for ABC question')
+                }
 
                 await page.waitForSelector(`#${answer}`, { state: 'visible', timeout: 10000 })
 

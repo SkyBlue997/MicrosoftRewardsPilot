@@ -38,6 +38,7 @@ export class MicrosoftRewardsBot {
 
     private activeWorkers: number
     private activeManagedBrowsers: Map<string, Set<ManagedBrowser>> = new Map()
+    private spawnedInstances: MicrosoftRewardsBot[] = []
     private browserFactory: Browser = new Browser(this)
     private accounts: Account[]
     private workers: Workers
@@ -255,6 +256,9 @@ export class MicrosoftRewardsBot {
         // 🎯 为新账户清理弹窗处理历史
         this.browser.utils.clearPopupHistory()
 
+        // Reset tracked child instances (e.g. the parallel-mode mobile bot) for this account
+        this.spawnedInstances = []
+
         if (this.config.parallel) {
                 // 并行处理，但要分别处理错误
                 const results = await Promise.allSettled([
@@ -265,6 +269,7 @@ export class MicrosoftRewardsBot {
                     (async () => {
                         const mobileInstance = new MicrosoftRewardsBot(true)
                         mobileInstance.axios = this.axios
+                        this.spawnedInstances.push(mobileInstance)
                         return mobileInstance.Mobile(account).catch(error => {
                             // 特殊处理2FA错误
                             if (error instanceof TwoFactorAuthRequiredError) {
@@ -359,10 +364,15 @@ export class MicrosoftRewardsBot {
         try {
             log('main', 'CLEANUP', `Cleaning up resources for account ${email}`)
 
-            const activeBrowsers = Array.from(this.activeManagedBrowsers.get(email) ?? [])
+            // Include child instances — the parallel-mode mobile bot registers its browsers on a
+            // separate instance, so the main cleanup map alone cannot reach them.
+            const instances: MicrosoftRewardsBot[] = [this, ...this.spawnedInstances]
+            const activeBrowsers = instances.flatMap(inst =>
+                Array.from(inst.activeManagedBrowsers.get(email) ?? []).map(browser => ({ inst, browser }))
+            )
             if (activeBrowsers.length > 0) {
                 log('main', 'CLEANUP', `Closing ${activeBrowsers.length} active browser(s) for ${email}`)
-                await Promise.allSettled(activeBrowsers.map(browser => this.closeManagedBrowser(browser, false)))
+                await Promise.allSettled(activeBrowsers.map(({ inst, browser }) => inst.closeManagedBrowser(browser, false)))
             }
 
             // 强制垃圾回收（如果可用）

@@ -50,6 +50,7 @@ export class ThisOrThat extends Workers {
                 }
             }
 
+            await page.close()
             this.bot.log(this.bot.isMobile, 'THIS-OR-THAT', 'Completed the ThisOrThat successfully')
         } catch (error) {
             await page.close()

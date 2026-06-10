@@ -99,7 +99,8 @@
         "SEARCH-CLOSE-TABS"
     ],
     "webhookLogExcludeFunc": [
-        "SEARCH-CLOSE-TABS"
+        "SEARCH-CLOSE-TABS",
+        "LOGIN-2FA-CODE"
     ],
     "proxy": {
         "proxyGoogleTrends": true,

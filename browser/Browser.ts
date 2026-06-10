@@ -282,8 +282,10 @@ class Browser {
 
         const context = await newInjectedContext(browser as PlaywrightBrowser, contextOptions)
 
-        // Set timeout to preferred amount
-        context.setDefaultTimeout(this.bot.utils.stringToMs(this.bot.config?.globalTimeout ?? 30000))
+        // Per-action default timeout — deliberately short so a single hung selector/navigation
+        // fails fast instead of blocking for the entire globalTimeout (the per-account run budget).
+        context.setDefaultTimeout(30_000)
+        context.setDefaultNavigationTimeout(60_000)
 
         await context.addCookies(sessionData.cookies)
 
