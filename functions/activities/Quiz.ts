@@ -2,19 +2,14 @@ import { Page } from 'rebrowser-playwright'
 
 import { Workers } from '../Workers'
 import { HumanBehaviorSimulator } from '../../src/anti-detection/human-behavior'
-import { NextGenAntiDetectionController } from '../../src/anti-detection/next-gen-controller'
 
 
 export class Quiz extends Workers {
     private humanBehavior: HumanBehaviorSimulator
-    private nextGenController: NextGenAntiDetectionController // eslint-disable-line @typescript-eslint/no-unused-vars
 
     constructor(bot: any) {
         super(bot)
         this.humanBehavior = new HumanBehaviorSimulator()
-        this.nextGenController = new NextGenAntiDetectionController()
-        // Ensure variables are recognized as used
-        void this.nextGenController
     }
 
     async doQuiz(page: Page) {

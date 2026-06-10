@@ -7,8 +7,6 @@ import { MicrosoftRewardsBot } from '../src/index'
 import { loadSessionData, saveFingerprintData } from '../utils/Load'
 import { updateFingerprintUserAgent } from '../utils/UserAgent'
 import { GeoLanguageDetector, GeoLocation } from '../utils/GeoLanguage'
-import { WebDriverStealth } from '../src/anti-detection/webdriver-stealth'
-import { NextGenAntiDetectionController } from '../src/anti-detection/next-gen-controller'
 
 import { AccountProxy } from '../interfaces/Account'
 
@@ -301,27 +299,9 @@ class Browser {
             this.bot.log(this.bot.isMobile, 'BROWSER-MOBILE', 'Mobile browser features: Touch=✓, Mobile=✓, Viewport=412x915, Platform=Android')
         }
 
-        // 注入反检测脚本
-        try {
-            const page = await context.newPage()
-
-            // 基础隐身脚本
-            await WebDriverStealth.injectStealthScript(page)
-            await WebDriverStealth.injectCanvasNoise(page)
-
-            if (this.bot.isMobile) {
-                await WebDriverStealth.injectMobileStealth(page)
-            }
-
-            // 下一代反检测系统
-            const nextGenController = new NextGenAntiDetectionController()
-            await nextGenController.initialize(context, page)
-
-            await page.close()
-            this.bot.log(this.bot.isMobile, 'ANTI-DETECTION', 'Next-Gen Anti-Detection System activated successfully')
-        } catch (error) {
-            this.bot.log(this.bot.isMobile, 'ANTI-DETECTION', `Failed to inject anti-detection systems: ${error}`, 'warn')
-        }
+        // Anti-detection fingerprint is applied at the context level by newInjectedContext
+        // (fingerprint-injector), covering every page in the context. No per-page stealth
+        // injection is done here (it previously ran on a throwaway page and had no effect).
 
         // 返回包含浏览器实例和上下文的管理对象
         return {

@@ -6,7 +6,6 @@ import { AxiosRequestConfig } from 'axios'
 import { MicrosoftRewardsBot } from '../src/index'
 import { saveSessionData } from '../utils/Load'
 import { HumanBehaviorSimulator } from '../src/anti-detection/human-behavior'
-import { NextGenAntiDetectionController } from '../src/anti-detection/next-gen-controller'
 
 import { OAuth } from '../interfaces/OAuth'
 import { AccountLockedError, LoginTimeoutError } from '../interfaces/Errors'
@@ -23,14 +22,10 @@ export class Login {
     private lastNoPromptLog: number = 0
     private noPromptIterations: number = 0
     private humanBehavior: HumanBehaviorSimulator
-    private nextGenController: NextGenAntiDetectionController // eslint-disable-line @typescript-eslint/no-unused-vars
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
         this.humanBehavior = new HumanBehaviorSimulator()
-        this.nextGenController = new NextGenAntiDetectionController()
-        // Ensure variable is recognized as used
-        void this.nextGenController
     }
 
     private async promptForInput(question: string): Promise<string> {

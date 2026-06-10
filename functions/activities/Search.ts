@@ -6,7 +6,6 @@ import {IntelligentDelaySystem} from '../../src/anti-detection/intelligent-delay
 import {ContextualSearchGenerator} from '../../src/anti-detection/contextual-search'
 import {HumanBehaviorSimulator} from '../../src/anti-detection/human-behavior'
 import {SessionManager} from '../../src/anti-detection/session-manager'
-import {NextGenAntiDetectionController} from '../../src/anti-detection/next-gen-controller'
 
 import {Counters, DashboardData} from '../../interfaces/DashboardData'
 import {GoogleSearch} from '../../interfaces/Search'
@@ -61,28 +60,6 @@ type GoogleTrendsResponse = [
     ][]
 ];
 
-// 在文件顶部添加类型定义
-interface UserProfile {
-    name: string
-    searchStyle: 'leisurely' | 'focused' | 'scattered'
-    taskPreference: 'mixed' | 'sequential' | 'random'
-    sessionDuration: { min: number, max: number }
-    breakProbability: number
-    multitaskingLevel: 'low' | 'medium' | 'high'
-}
-
-interface UltraAntiDetectionScheduler {
-    generateUserProfile(): UserProfile
-
-    isOptimalActivityTime(): boolean
-
-    simulateSessionInterruption(page: Page): Promise<void>
-
-    simulateMultitasking(page: Page, taskName: string): Promise<void>
-
-    simulateTabBrowsing(page: Page): Promise<void>
-}
-
 export class Search extends Workers {
     private bingHome = 'https://bing.com'
     private searchPageURL = ''
@@ -94,7 +71,6 @@ export class Search extends Workers {
     private contextualSearch: ContextualSearchGenerator
     private humanBehavior: HumanBehaviorSimulator
     private sessionManager: SessionManager
-    private nextGenController: NextGenAntiDetectionController
 
     constructor(bot: any) {
         super(bot)
@@ -107,7 +83,6 @@ export class Search extends Workers {
             attentionSpan: 'medium',
             multitaskingTendency: 'low'
         })
-        this.nextGenController = new NextGenAntiDetectionController()
     }
 
     public async doSearch(page: Page, data: DashboardData) {
@@ -150,14 +125,6 @@ export class Search extends Workers {
         await page.goto(this.searchPageURL ? this.searchPageURL : this.bingHome)
 
         await this.bot.utils.wait(2000)
-
-        // 🧬 执行生物仿生适应
-        try {
-            await this.nextGenController.executeBiomimeticAdaptation(page)
-            this.bot.log(this.bot.isMobile, 'BIOMIMETIC', 'Biomimetic adaptation executed')
-        } catch (bioError) {
-            this.bot.log(this.bot.isMobile, 'BIOMIMETIC-ERROR', `Biomimetic adaptation failed: ${bioError}`, 'warn')
-        }
 
         await this.bot.browser.utils.tryDismissAllMessages(page)
 
@@ -1065,26 +1032,6 @@ export class Search extends Workers {
                     clickRetries++
                 }
 
-                // 🚀 执行下一代反检测策略
-                try {
-                    const operationContext = {
-                        recentFailures: this.consecutiveFailures,
-                        detectionEvents: 0,
-                        systemLoad: 0.5,
-                        networkAnomalies: 0,
-                        timeOfDay: new Date().getHours(),
-                        accountAge: 30
-                    }
-                    await this.nextGenController.executeAdaptiveStrategy(searchPage, operationContext)
-
-                    // 运行自适应学习循环
-                    if (i % 5 === 0) { // 每5次搜索运行一次
-                        await this.nextGenController.runAdaptationCycle(searchPage)
-                    }
-                } catch (nextGenError) {
-                    this.bot.log(this.bot.isMobile, 'NEXT-GEN-ERROR', `Next-gen system error: ${nextGenError}`, 'warn')
-                }
-
                 // 使用增强的人类行为模拟
                 await this.humanBehavior.simulateThinking()
 
@@ -1181,18 +1128,6 @@ export class Search extends Workers {
                     } catch (checkError) {
                         this.bot.log(this.bot.isMobile, 'MOBILE-BING-CHECK', `Mobile Bing verification failed: ${checkError}`, 'warn')
                     }
-                }
-
-                // 🌊 执行量子级行为模拟
-                try {
-                    const quantumActions = [
-                        {type: 'scroll', parameters: {direction: 'down'}, probability: 0.7},
-                        {type: 'hover', parameters: {element: 'random'}, probability: 0.3},
-                        {type: 'click', parameters: {element: 'result'}, probability: 0.8}
-                    ]
-                    await this.nextGenController.executeQuantumBehavior(resultPage, quantumActions)
-                } catch (quantumError) {
-                    this.bot.log(this.bot.isMobile, 'QUANTUM-ERROR', `Quantum behavior error: ${quantumError}`, 'warn')
                 }
 
                 // 更安全的人类行为模拟
@@ -1520,17 +1455,6 @@ export class Search extends Workers {
             this.bot.log(this.bot.isMobile, 'SEARCH-LIFE-INTERRUPTION',
                 `Life interruption: ${interruption.reason} (${Math.round(interruption.duration / 1000)}s)`)
             return delay + interruption.duration
-        }
-
-        // 🧬 每10次搜索执行一次生物进化适应
-        if (searchIndex % 10 === 0) {
-            try {
-                // 注意：这里我们不能直接传递page，因为在延迟计算时可能没有page对象
-                // 所以我们记录需要执行生物适应的标记
-                this.bot.log(this.bot.isMobile, 'BIOMIMETIC', 'Scheduling biomimetic adaptation for next search')
-            } catch (bioError) {
-                this.bot.log(this.bot.isMobile, 'BIOMIMETIC-ERROR', `Biomimetic error: ${bioError}`, 'warn')
-            }
         }
 
         return delay
@@ -2186,306 +2110,4 @@ export class Search extends Workers {
         return additionalQueries
     }
 
-    /**
-     * 🛡️ 最高级别防检测搜索执行
-     */
-    public async doSearchWithUltraAntiDetection(page: Page, data: DashboardData) {
-        // 导入防检测调度器
-        const {UltraAntiDetectionScheduler} = await import('../../src/anti-detection/ultra-anti-detection.js')
-        const antiDetectionScheduler = new UltraAntiDetectionScheduler(this.bot)
-
-        this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🛡️ Starting Ultra Anti-Detection Search')
-
-        // 生成用户行为档案
-        const userProfile = antiDetectionScheduler.generateUserProfile()
-        this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', `👤 User Profile: ${userProfile.name} (${userProfile.searchStyle})`)
-
-        // 检查是否是最佳活动时间
-        if (!antiDetectionScheduler.isOptimalActivityTime()) {
-            const delayMinutes = 5 + Math.random() * 15
-            this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', `⏰ Suboptimal time detected, delaying ${delayMinutes.toFixed(1)} minutes`)
-            await this.bot.utils.wait(delayMinutes * 60 * 1000)
-        }
-
-        // 随机决定是否在搜索开始前模拟其他活动
-        if (Math.random() < 0.4) {
-            this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🎭 Pre-search activity simulation')
-            await antiDetectionScheduler.simulateSessionInterruption(page)
-        }
-
-        // 执行原有的搜索逻辑，但添加增强的行为模拟
-        await this.doSearchWithEnhancedBehavior(page, data, antiDetectionScheduler, userProfile)
-
-        this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🎉 Ultra Anti-Detection Search Completed')
-    }
-
-    /**
-     * 🎯 增强行为的搜索执行
-     */
-    private async doSearchWithEnhancedBehavior(page: Page, data: DashboardData, antiDetectionScheduler: UltraAntiDetectionScheduler, userProfile: UserProfile) {
-        this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Starting Enhanced Bing searches')
-
-        page = await this.bot.browser.utils.getLatestTab(page)
-
-        let searchCounters: Counters = await this.bot.browser.func.getSearchPoints()
-        let missingPoints = this.calculatePoints(searchCounters)
-
-        if (missingPoints === 0) {
-            this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Bing searches have already been completed')
-            return
-        }
-
-        // 生成多样化查询（原有逻辑）
-        let allSearchQueries = await this.generateDiversifiedQueries(data)
-        allSearchQueries = this.bot.utils.shuffleArray(allSearchQueries) as (GoogleSearch | string)[]
-        allSearchQueries = Array.from(new Set(allSearchQueries))
-
-        this.bot.log(this.bot.isMobile, 'SEARCH-QUERY-SOURCE', `Generated ${allSearchQueries.length} diversified search queries`)
-
-        // 导航到Bing
-        await page.goto(this.searchPageURL ? this.searchPageURL : this.bingHome)
-        await this.bot.utils.wait(2000)
-        await this.bot.browser.utils.tryDismissAllMessages(page)
-
-        // 准备查询列表
-        const queries: string[] = []
-        allSearchQueries.forEach(x => {
-            if (typeof x === 'string') {
-                queries.push(x)
-            } else {
-                this.bot.isMobile ? queries.push(x.topic) : queries.push(x.topic, ...x.related)
-            }
-        })
-
-        // 🎯 增强的搜索循环
-        const searchStartTime = Date.now()
-        const searchTimeoutMs = 30 * 60 * 1000 // 30分钟总体超时
-        let completedSearches = 0
-        let earnedPoints = 0
-        let maxLoop = 0
-        let sessionInterruptionCount = 0
-
-        this.bot.log(this.bot.isMobile, 'SEARCH-PROGRESS', `Starting enhanced search: ${missingPoints} points needed, ${queries.length} queries available`)
-
-        for (let i = 0; i < queries.length; i++) {
-            // 检查总体超时
-            if (Date.now() - searchStartTime > searchTimeoutMs) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Enhanced search timeout after 30 minutes, stopping searches', 'warn')
-                break
-            }
-
-            const query = queries[i] as string
-            completedSearches++
-
-            // 🎭 搜索前的多任务模拟
-            if (userProfile.multitaskingLevel !== 'low') {
-                await antiDetectionScheduler.simulateMultitasking(page, `Search ${completedSearches}`)
-            }
-
-            this.bot.log(this.bot.isMobile, 'SEARCH-BING', `[${completedSearches}/${queries.length}] ${missingPoints} Points Remaining | Query: ${query}`)
-
-            // 执行搜索
-            searchCounters = await this.bingSearchWithEnhancedBehavior(page, query, antiDetectionScheduler)
-            const newMissingPoints = this.calculatePoints(searchCounters)
-            const pointsGained = missingPoints - newMissingPoints
-
-            if (pointsGained > 0) {
-                earnedPoints += pointsGained
-                maxLoop = 0 // 重置失败计数
-                this.bot.log(this.bot.isMobile, 'SEARCH-PROGRESS', `✅ Earned ${pointsGained} points (Total: ${earnedPoints} points)`)
-            } else {
-                maxLoop++
-                if (maxLoop === 3) {
-                    this.bot.log(this.bot.isMobile, 'SEARCH-WARNING', `⚠️ No points gained for ${maxLoop} searches, may need enhanced delays`)
-
-                    // 🎭 模拟用户困惑和重新尝试的行为
-                    await this.simulateUserConfusion(page, antiDetectionScheduler)
-                }
-            }
-
-            missingPoints = newMissingPoints
-
-            if (missingPoints === 0) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-COMPLETE', `🎉 Enhanced search completed! Total earned: ${earnedPoints} points`)
-                break
-            }
-
-            // 🕒 智能延迟系统 + 会话管理
-            const shouldTakeBreak = this.shouldTakeSessionBreak(completedSearches, sessionInterruptionCount, userProfile)
-
-            if (shouldTakeBreak) {
-                sessionInterruptionCount++
-                this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '☕ Taking session break based on user profile')
-                await antiDetectionScheduler.simulateSessionInterruption(page)
-
-                // 会话恢复后的重新定向
-                try {
-                    await page.goto(this.searchPageURL ? this.searchPageURL : this.bingHome)
-                    await this.bot.utils.wait(2000)
-                } catch (error) {
-                    this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', `Session recovery navigation failed: ${error}`, 'warn')
-                }
-            } else {
-                // 标准智能延迟
-                const smartDelay = await this.getEnhancedSmartSearchDelay(completedSearches, userProfile)
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING-DELAY', `Waiting ${Math.round(smartDelay / 1000)}s (enhanced delay)...`)
-                await this.bot.utils.wait(smartDelay)
-            }
-
-            // 桌面端和移动端使用不同的maxLoop限制
-            const maxLoopLimit = this.bot.isMobile ? 8 : 12 // 增加容忍度
-
-            if (maxLoop > maxLoopLimit) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-BING', `Enhanced search didn't gain point for ${maxLoopLimit} iterations, entering recovery mode`, 'warn')
-
-                // 🔄 恢复模式
-                await this.enterRecoveryMode(page, antiDetectionScheduler)
-                maxLoop = 0
-                break
-            }
-        }
-
-        this.bot.log(this.bot.isMobile, 'SEARCH-BING', 'Enhanced searches completed')
-    }
-
-    /**
-     * 🎭 模拟用户困惑行为
-     */
-    private async simulateUserConfusion(page: Page, antiDetectionScheduler: UltraAntiDetectionScheduler): Promise<void> {
-        this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🤔 Simulating user confusion behavior')
-
-        const confusionBehaviors = [
-            async () => {
-                // 刷新页面
-                await page.reload({waitUntil: 'domcontentloaded'}).catch(() => {
-                })
-                await this.bot.utils.wait(3000)
-            },
-            async () => {
-                // 检查其他标签页
-                await antiDetectionScheduler.simulateSessionInterruption(page)
-            },
-            async () => {
-                // 滚动页面寻找问题
-                await page.keyboard.press('Home')
-                await this.bot.utils.wait(1000)
-                await page.keyboard.press('PageDown')
-                await this.bot.utils.wait(2000)
-                await page.keyboard.press('PageDown')
-                await this.bot.utils.wait(1000)
-            }
-        ]
-
-        const randomIndex = Math.floor(Math.random() * confusionBehaviors.length)
-        const behavior = confusionBehaviors[randomIndex]
-        if (behavior) {
-            await behavior()
-        }
-    }
-
-    /**
-     * 🕒 判断是否应该休息
-     */
-    private shouldTakeSessionBreak(completedSearches: number, sessionInterruptionCount: number, userProfile: UserProfile): boolean {
-        // 基于用户档案的休息概率
-        const baseBreakProbability = userProfile.breakProbability
-
-        // 搜索次数越多，休息概率越高
-        const searchFatigue = Math.min(completedSearches * 0.02, 0.3)
-
-        // 距离上次休息的搜索次数
-        const searchesSinceLastBreak = completedSearches - (sessionInterruptionCount * 8) // 假设每8次搜索后可能休息
-        const restNeed = Math.max(0, (searchesSinceLastBreak - 15) * 0.05) // 15次搜索后开始需要休息
-
-        const totalBreakProbability = Math.min(baseBreakProbability + searchFatigue + restNeed, 0.7)
-
-        return Math.random() < totalBreakProbability
-    }
-
-    /**
-     * 🔄 进入恢复模式
-     */
-    private async enterRecoveryMode(page: Page, antiDetectionScheduler: UltraAntiDetectionScheduler): Promise<void> {
-        this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '🔄 Entering recovery mode')
-
-        // 模拟用户尝试解决问题的行为
-        const recoveryActions = [
-            async () => {
-                // 清除缓存和重新加载
-                await page.reload({waitUntil: 'domcontentloaded'}).catch(() => {
-                })
-                await this.bot.utils.wait(5000)
-            },
-            async () => {
-                // 模拟检查网络连接
-                await antiDetectionScheduler.simulateTabBrowsing(page)
-            },
-            async () => {
-                // 长时间休息
-                this.bot.log(this.bot.isMobile, 'ULTRA-SEARCH', '☕ Extended break in recovery mode')
-                await this.bot.utils.wait(120000 + Math.random() * 180000) // 2-5分钟
-            }
-        ]
-
-        const randomIndex = Math.floor(Math.random() * recoveryActions.length)
-        const action = recoveryActions[randomIndex]
-        if (action) {
-            await action()
-        }
-    }
-
-    /**
-     * 🚀 增强的智能延迟计算
-     */
-    private async getEnhancedSmartSearchDelay(searchIndex: number, userProfile: UserProfile): Promise<number> {
-        // 获取基础延迟
-        const baseDelay = await this.calculateSmartDelay(searchIndex)
-
-        // 根据用户档案调整
-        let profileMultiplier = 1.0
-        switch (userProfile.searchStyle) {
-            case 'leisurely':
-                profileMultiplier = 1.5 // 悠闲用户延迟更长
-                break
-            case 'focused':
-                profileMultiplier = 1.0 // 专注用户正常延迟
-                break
-            case 'scattered':
-                profileMultiplier = 1.8 // 分散注意力用户延迟最长
-                break
-        }
-
-        // 时间段调整
-        const hour = new Date().getHours()
-        let timeMultiplier = 1.0
-        if (hour >= 9 && hour <= 17) {
-            timeMultiplier = 1.2 // 工作时间更长延迟
-        } else if (hour >= 22 || hour <= 6) {
-            timeMultiplier = 0.8 // 深夜时间稍短延迟
-        }
-
-        // 随机波动
-        const randomFactor = 0.7 + Math.random() * 0.6 // ±30%变化
-
-        const enhancedDelay = Math.floor(baseDelay * profileMultiplier * timeMultiplier * randomFactor)
-
-        // 确保在合理范围内
-        const minDelay = this.bot.isMobile ? 45000 : 60000 // 移动端45s，桌面端60s
-        const maxDelay = this.bot.isMobile ? 300000 : 480000 // 移动端5分钟，桌面端8分钟
-
-        return Math.max(minDelay, Math.min(maxDelay, enhancedDelay))
-    }
-
-    /**
-     * 🎯 增强行为的Bing搜索
-     */
-    private async bingSearchWithEnhancedBehavior(page: Page, query: string, antiDetectionScheduler: UltraAntiDetectionScheduler): Promise<Counters> {
-        // 在搜索前随机模拟一些行为
-        if (Math.random() < 0.2) {
-            await antiDetectionScheduler.simulateMultitasking(page, 'pre-search')
-        }
-
-        // 执行原有的搜索逻辑
-        return await this.bingSearch(page, query)
-    }
 }
