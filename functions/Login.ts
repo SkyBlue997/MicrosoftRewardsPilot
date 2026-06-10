@@ -64,9 +64,17 @@ export class Login {
             // Check if account is locked
             await this.checkAccountLocked(page)
 
-            const isLoggedIn = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 }).then(() => true).catch(() => false)
+            const portalPresent = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 }).then(() => true).catch(() => false)
+            // The anonymous Rewards landing (rewards.bing.com/welcome) ALSO carries the RewardsPortal
+            // role, so the selector alone false-positives as "logged in". Require we are not on /welcome.
+            const isLoggedIn = portalPresent && !page.url().includes('/welcome')
 
             if (!isLoggedIn) {
+                // The anonymous welcome page has no email field — it requires clicking "Sign in"
+                // to reach the Microsoft login page first.
+                if (page.url().includes('/welcome')) {
+                    await this.startSignInFromWelcome(page)
+                }
                 await this.execLogin(page, email, password)
             } else {
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Already logged in')
@@ -91,6 +99,24 @@ export class Login {
         }
     }
 
+    private async startSignInFromWelcome(page: Page): Promise<void> {
+        try {
+            this.bot.log(this.bot.isMobile, 'LOGIN', 'On Rewards welcome page — clicking "Sign in" to reach the Microsoft login page')
+            const signInLink = await page.waitForSelector('#rewards-header-sign-in, #card-footer-sign-in-link', { state: 'visible', timeout: 5000 }).catch(() => null)
+            if (signInLink) {
+                await signInLink.click()
+            } else {
+                this.bot.log(this.bot.isMobile, 'LOGIN', 'Sign-in link not found on welcome page; navigating to signin directly', 'warn')
+                await page.goto('https://rewards.bing.com/signin', { waitUntil: 'domcontentloaded' }).catch(() => { })
+            }
+            // Wait for the Microsoft login page (email field, or password/userDisplayName if prefilled)
+            await page.waitForSelector('input[type="email"], input[type="password"], #userDisplayName', { state: 'visible', timeout: 15000 }).catch(() => null)
+            await this.bot.utils.wait(1000)
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Failed to start sign-in from welcome page: ${error}`, 'warn')
+        }
+    }
+
     private async execLogin(page: Page, email: string, password: string) {
         try {
             await this.enterEmail(page, email)
@@ -99,6 +125,9 @@ export class Login {
             await this.bot.utils.wait(2000)
             await this.enterPassword(page, password)
             await this.bot.utils.wait(2000)
+
+            // 🎯 处理密码提交后出现的 2FA 挑战（Authenticator 数字匹配 / SMS / 邮箱）
+            await this.handlePostPasswordTwoFactor(page)
 
             // 🎯 检查并处理Passkey设置循环（密码输入后可能出现）
             try {
@@ -191,13 +220,22 @@ export class Login {
                 const otherWaysButton = await viewFooter.$('span[role="button"]')
                 if (otherWaysButton) {
                     await otherWaysButton.click()
-                    await this.bot.utils.wait(5000)
+                    await this.bot.utils.wait(3000)
 
-                    const secondListItem = page.locator('[role="listitem"]').nth(1)
-                    if (await secondListItem.isVisible()) {
-                        await secondListItem.click()
+                    // After "other ways to sign in", the password field is often shown directly. If not,
+                    // pick the explicit "Use your password" option. (The previous blind nth(1) list click
+                    // could land on the create-account option and navigate to signup.live.com.)
+                    const passwordVisible = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 3000 }).catch(() => null)
+                    if (!passwordVisible) {
+                        const usePasswordTexts = ['Use your password', 'パスワードを使用する', '使用密码', '비밀번호 사용', 'Passwort verwenden', 'Utiliser votre mot de passe', 'Usar tu contraseña']
+                        for (const t of usePasswordTexts) {
+                            const opt = page.locator(`[role="listitem"]:has-text("${t}"), [role="button"]:has-text("${t}")`).first()
+                            if (await opt.isVisible().catch(() => false)) {
+                                await opt.click().catch(() => { })
+                                break
+                            }
+                        }
                     }
-
                 }
             }
 
@@ -246,6 +284,34 @@ export class Login {
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Password entry failed: ${error}`, 'error')
             throw error
+        }
+    }
+
+    /**
+     * 密码提交后，Microsoft 常会再要求 2FA（Authenticator 数字匹配 / SMS / 邮箱）。
+     * enterPassword 仅在“密码框本身缺失”时才路由到 handle2FA，这里补上“密码提交之后”的检测，
+     * 只有确实出现 2FA 元素时才进入 handle2FA，避免影响无 2FA 账户的正常流程。
+     */
+    private async handlePostPasswordTwoFactor(page: Page): Promise<void> {
+        try {
+            const alreadyIn = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 2000 }).then(() => true).catch(() => false)
+            if (alreadyIn) {
+                return
+            }
+
+            const twoFAVisible = await Promise.race([
+                page.waitForSelector('input[name="otc"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('input[name="proofconfirmation"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('#displaySign, [data-testid="displaySign"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('button[aria-describedby="confirmSendTitle"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false)
+            ])
+
+            if (twoFAVisible) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', '2FA challenge detected after password entry — handling')
+                await this.handle2FA(page)
+            }
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Post-password 2FA detection failed: ${error}`, 'warn')
         }
     }
 
@@ -833,15 +899,31 @@ export class Login {
             }
         }
 
-        // KMSI (Keep me signed in) prompt
-        const kmsi = await page.waitForSelector('[data-testid="kmsiVideo"]', { timeout: 800 }).catch(()=>null)
-        if (kmsi) {
-            const yesButton = await page.$('button[data-testid="primaryButton"]')
-            if (yesButton) {
-                await yesButton.click().catch(()=>{})
-                this.bot.log(this.bot.isMobile, 'LOGIN-KMSI', 'KMSI dialog detected -> accepted (Yes)')
-                await page.waitForTimeout(300)
-                didSomething = true
+        // KMSI ("Stay signed in?" / Keep me signed in) prompt — handle the classic kmsiVideo variant
+        // AND the newer text-based one (button[type=submit] はい/Yes, no stable id/data-testid).
+        if (!didSomething) {
+            const kmsiClassic = await page.$('[data-testid="kmsiVideo"]').catch(() => null)
+            const pageTitle = await page.title().catch(() => '')
+            const titleEl2 = await page.$('[data-testid="title"], #loginHeader').catch(() => null)
+            const titleTxt = ((titleEl2 ? (await titleEl2.textContent().catch(() => '')) : '') || '') + ' ' + pageTitle
+            const looksLikeKmsi = !!kmsiClassic || /stay signed in|keep me signed|サインインの状態を維持|保持登录状态|로그인 상태 유지|angemeldet bleiben|rester connecté/i.test(titleTxt)
+            if (looksLikeKmsi) {
+                let clicked = false
+                for (const sel of ['#idSIButton9', 'button[data-testid="primaryButton"]']) {
+                    const btn = await page.$(sel).catch(() => null)
+                    if (btn) { await btn.click().catch(() => { }); clicked = true; break }
+                }
+                if (!clicked) {
+                    for (const t of ['はい', 'Yes', '是', '예', 'Ja', 'Oui', 'Sí']) {
+                        const btn = page.locator(`button[type="submit"]:has-text("${t}"), button:has-text("${t}")`).first()
+                        if (await btn.isVisible().catch(() => false)) { await btn.click().catch(() => { }); clicked = true; break }
+                    }
+                }
+                if (clicked) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN-KMSI', 'KMSI "Stay signed in?" detected -> accepted (Yes)')
+                    await page.waitForTimeout(500)
+                    didSomething = true
+                }
             }
         }
 
@@ -850,7 +932,7 @@ export class Login {
             const now = Date.now()
             if (this.noPromptIterations === 1 || (now - this.lastNoPromptLog) > 10000) {
                 this.lastNoPromptLog = now
-                this.bot.log(this.bot.isMobile, 'LOGIN-NO-PROMPT', `No dialogs (x${this.noPromptIterations})`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-NO-PROMPT', `No dialogs (x${this.noPromptIterations}) | page: "${await page.title().catch(() => '')}"`)
                 // Reset counter if it grows large to keep number meaningful
                 if (this.noPromptIterations > 50) this.noPromptIterations = 0
             }
