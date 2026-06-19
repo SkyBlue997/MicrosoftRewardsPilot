@@ -48,10 +48,11 @@ export class RewardsEarner {
         let balance = data.balance
 
         for (const p of claimable) {
+            let didClaim = false
             try {
                 if (p.type === 'msnreadearn') {
                     const gained = await this.doReadToEarn(p)
-                    if (gained > 0) { claimedCount++; totalGained += gained }
+                    if (gained > 0) { claimedCount++; totalGained += gained; didClaim = true }
                 } else {
                     const res = await this.api.claim(p.offerId)
                     balance = res.balance || balance
@@ -60,13 +61,15 @@ export class RewardsEarner {
                     } else {
                         claimedCount++
                         totalGained += res.points
+                        didClaim = true
                         this.log(`✅ "${p.title}" (+${res.points}) | balance ${res.balance}`, 'log', 'green')
                     }
                 }
             } catch (error) {
                 this.log(`❌ Failed "${p.title}" (${p.offerId}): ${error}`, 'warn')
             }
-            await this.humanDelay()
+            // Only pause after an activity that actually completed (no need to "wait" for a duplicate/no-op)
+            if (didClaim) await this.humanDelay()
         }
 
         this.log(`Activities done — claimed ${claimedCount}, +${totalGained} points (balance ~${balance})`, 'log', 'green')

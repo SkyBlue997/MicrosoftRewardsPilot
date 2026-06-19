@@ -12,6 +12,8 @@ import { loadAccounts, loadConfig, saveSessionData, refreshAllConfigs } from '..
 import { Login } from '../functions/Login'
 import Activities from '../functions/Activities'
 import { RewardsEarner } from './rewards-api/RewardsEarner'
+import { RewardsApi } from './rewards-api/RewardsApi'
+import { SearchRunner } from './rewards-api/SearchRunner'
 
 import { Account } from '../interfaces/Account'
 import { DashboardData } from '../interfaces/DashboardData'
@@ -422,6 +424,19 @@ export class MicrosoftRewardsBot {
             const result = await earner.run()
             this.pointsInitial = result.balance
             log(this.isMobile, 'MAIN-POINTS', `Desktop activities done: claimed ${result.claimed}, +${result.pointsGained} points (balance ${result.balance})`)
+
+            // Earn search points with real, human-paced Bing searches (search is not claimable via the API)
+            if (this.config.workers.doDesktopSearch !== false) {
+                const searchPage = await managedBrowser.context.newPage()
+                try {
+                    const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage)
+                    await searcher.run()
+                } catch (searchError) {
+                    log(this.isMobile, 'SEARCH', `Desktop search failed: ${searchError}`, 'error')
+                } finally {
+                    await searchPage.close().catch(() => { })
+                }
+            }
 
             // Save cookies
             await saveSessionData(this.config.sessionPath, managedBrowser.context, account.email, this.isMobile)
