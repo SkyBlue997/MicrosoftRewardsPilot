@@ -10,8 +10,8 @@ import Util from '../utils/Utils'
 import { loadAccounts, loadConfig, saveSessionData, refreshAllConfigs } from '../utils/Load'
 
 import { Login } from '../functions/Login'
-import { Workers } from '../functions/Workers'
 import Activities from '../functions/Activities'
+import { RewardsEarner } from './rewards-api/RewardsEarner'
 
 import { Account } from '../interfaces/Account'
 import { DashboardData } from '../interfaces/DashboardData'
@@ -41,7 +41,6 @@ export class MicrosoftRewardsBot {
     private spawnedInstances: MicrosoftRewardsBot[] = []
     private browserFactory: Browser = new Browser(this)
     private accounts: Account[]
-    private workers: Workers
     private login = new Login(this)
     private accessToken: string = ''
 
@@ -53,7 +52,6 @@ export class MicrosoftRewardsBot {
 
         this.accounts = []
         this.utils = new Util()
-        this.workers = new Workers(this)
         this.browser = {
             func: new BrowserFunc(this),
             utils: new BrowserUtil(this)
@@ -403,7 +401,6 @@ export class MicrosoftRewardsBot {
     // Desktop
     async Desktop(account: Account): Promise<void> {
         let managedBrowser: ManagedBrowser | null = null
-        let workerPage
         let sessionStable = false
 
         try {
@@ -413,45 +410,18 @@ export class MicrosoftRewardsBot {
 
             log(this.isMobile, 'MAIN', 'Starting desktop browser')
 
-            // Login into MS Rewards, then go to rewards homepage
+            // Login into MS Rewards
             await this.login.login(this.homePage, account.email, account.password)
             sessionStable = true
 
-            await this.browser.func.goHome(this.homePage)
+            // The new rewards.bing.com SPA has no scrapable dashboard, so data + activity completion go
+            // through the dapi backend. Get the OAuth token, then claim activities via the API.
+            this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
 
-            const data = await this.browser.func.getDashboardData()
-
-            this.pointsInitial = data.userStatus.availablePoints
-
-            log(this.isMobile, 'MAIN-POINTS', `Current point count: ${this.pointsInitial}`)
-
-            const browserEnarablePoints = await this.browser.func.getBrowserEarnablePoints()
-
-            // Tally all the desktop points
-            this.pointsCanCollect = browserEnarablePoints.dailySetPoints +
-                browserEnarablePoints.desktopSearchPoints
-                + browserEnarablePoints.morePromotionsPoints
-
-            log(this.isMobile, 'MAIN-POINTS', `You can earn ${this.pointsCanCollect} points today`)
-
-            // If runOnZeroPoints is false and 0 points to earn, don't continue
-            if (!this.config.runOnZeroPoints && this.pointsCanCollect === 0) {
-                log(this.isMobile, 'MAIN', 'No points to earn and "runOnZeroPoints" is set to "false", stopping!', 'log', 'yellow')
-
-                // Close desktop browser
-                await this.closeManagedBrowser(managedBrowser, sessionStable)
-                managedBrowser = null
-                return
-            }
-
-            // Open a new tab to where the tasks are going to be completed
-            workerPage = await managedBrowser.context.newPage()
-
-            // Go to homepage on worker page
-            await this.browser.func.goHome(workerPage)
-
-            // Execute tasks with individual error handling
-            await this.executeDesktopTasks(workerPage, data)
+            const earner = new RewardsEarner(this, this.accessToken)
+            const result = await earner.run()
+            this.pointsInitial = result.balance
+            log(this.isMobile, 'MAIN-POINTS', `Desktop activities done: claimed ${result.claimed}, +${result.pointsGained} points (balance ${result.balance})`)
 
             // Save cookies
             await saveSessionData(this.config.sessionPath, managedBrowser.context, account.email, this.isMobile)
@@ -462,15 +432,6 @@ export class MicrosoftRewardsBot {
 
         } catch (error) {
             log(this.isMobile, 'DESKTOP-ERROR', `Desktop task failed for ${account.email}: ${error}`, 'error')
-
-            // 确保资源被清理
-            if (workerPage) {
-                try {
-                    await workerPage.close()
-                } catch (closeError) {
-                    // 忽略关闭错误
-                }
-            }
 
             if (managedBrowser) {
                 try {
@@ -485,52 +446,13 @@ export class MicrosoftRewardsBot {
         }
     }
 
-    /**
-     * 执行Desktop任务
-     */
-    private async executeDesktopTasks(workerPage: Page, data: DashboardData): Promise<void> {
-        const tasks = [
-            {
-                name: 'Daily Set',
-                enabled: this.config.workers.doDailySet,
-                task: () => this.workers.doDailySet(workerPage, data)
-            },
-            {
-                name: 'More Promotions',
-                enabled: this.config.workers.doMorePromotions,
-                task: () => this.workers.doMorePromotions(workerPage, data)
-            },
-            {
-                name: 'Punch Cards',
-                enabled: this.config.workers.doPunchCards,
-                task: () => this.workers.doPunchCard(workerPage, data)
-            },
-            {
-                name: 'Desktop Search',
-                enabled: this.config.workers.doDesktopSearch,
-                task: () => this.activities.doSearch(workerPage, data)
-            }
-        ]
-
-        for (const { name, enabled, task } of tasks) {
-            if (!enabled) {
-                log(this.isMobile, 'DESKTOP-TASK', `Skipping ${name} (disabled in config)`)
-                continue
-            }
-
-            try {
-                log(this.isMobile, 'DESKTOP-TASK', `Starting ${name}...`)
-                await task()
-                log(this.isMobile, 'DESKTOP-TASK', `✅ Completed ${name}`, 'log', 'green')
-            } catch (error) {
-                log(this.isMobile, 'DESKTOP-TASK', `❌ Failed ${name}: ${error}`, 'error')
-                // 继续执行其他任务，不因为单个任务失败而停止
-            }
-        }
-    }
-
     // Mobile
     async Mobile(account: Account, retryCount = 0): Promise<void> {
+        // Mobile activities (check-in, read-to-earn) are now claimed account-wide via the dapi API in
+        // Desktop(); mobile search is not yet ported to the new Rewards SPA. Skip the mobile flow for
+        // now to avoid a redundant second login (anti-throttle) and the broken DOM dashboard.
+        log(this.isMobile, 'MAIN', 'Mobile flow skipped (activities handled via API in desktop; mobile search rework pending)')
+        if (account && retryCount >= 0) return
         // 正确读取重试设置，支持0值
         const maxRetries = this.config.searchSettings?.retryMobileSearchAmount !== undefined
             ? this.config.searchSettings.retryMobileSearchAmount

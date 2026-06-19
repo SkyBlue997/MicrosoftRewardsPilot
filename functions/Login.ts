@@ -64,10 +64,12 @@ export class Login {
             // Check if account is locked
             await this.checkAccountLocked(page)
 
-            const portalPresent = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 }).then(() => true).catch(() => false)
-            // The anonymous Rewards landing (rewards.bing.com/welcome) ALSO carries the RewardsPortal
-            // role, so the selector alone false-positives as "logged in". Require we are not on /welcome.
-            const isLoggedIn = portalPresent && !page.url().includes('/welcome')
+            // New Rewards UI: logged in when we land on the authenticated SPA (rewards.bing.com,
+            // not the anonymous /welcome or a sign-in page). The old RewardsPortal marker is gone.
+            await this.bot.utils.wait(1500)
+            const cu = new URL(page.url())
+            const isLoggedIn = (cu.hostname === 'rewards.bing.com' || cu.hostname.endsWith('.rewards.bing.com'))
+                && !cu.pathname.includes('/welcome') && !cu.pathname.includes('/signin')
 
             if (!isLoggedIn) {
                 // The anonymous welcome page has no email field — it requires clicking "Sign in"
@@ -627,7 +629,6 @@ export class Login {
 
     private async checkLoggedIn(page: Page) {
         const targetHostname = 'rewards.bing.com'
-        const targetPathname = '/'
 
         const start = Date.now()
         const maxWaitMs = Number(process.env.LOGIN_MAX_WAIT_MS || 180000) // default 3 minutes
@@ -637,7 +638,12 @@ export class Login {
         while (true) {
             await this.dismissLoginMessages(page)
             const currentURL = new URL(page.url())
-            if (currentURL.hostname === targetHostname && currentURL.pathname === targetPathname) {
+            // New Rewards UI: a successful login lands on the authenticated SPA at
+            // rewards.bing.com/dashboard. The old "/" path + RewardsPortal markers are gone, so treat
+            // reaching the rewards host past the welcome/sign-in pages as logged in.
+            const onRewardsHost = currentURL.hostname === targetHostname || currentURL.hostname.endsWith('.rewards.bing.com')
+            const onLoginPage = currentURL.pathname.includes('/welcome') || currentURL.pathname.includes('/signin') || currentURL.pathname.includes('/createuser')
+            if (onRewardsHost && !onLoginPage) {
                 break
             }
 
@@ -655,8 +661,8 @@ export class Login {
             }
         }
 
-        // Wait for login to complete
-        await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 })
+        // Allow the dashboard SPA to settle (the old RewardsPortal DOM marker no longer exists)
+        await this.bot.utils.wait(2000)
         this.bot.log(this.bot.isMobile, 'LOGIN', 'Successfully logged into the rewards portal')
 
         // 🎯 处理Passkey设置循环问题
