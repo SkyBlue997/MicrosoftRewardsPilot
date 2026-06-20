@@ -189,10 +189,8 @@ class Browser {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
 
-                // 关键反检测参数
+                // 反检测：在 blink 层移除 webdriver 标识（与 rebrowser 的 Runtime.enable 修复互为冗余保险）
                 '--disable-blink-features=AutomationControlled',
-                '--exclude-switches=enable-automation',
-                '--disable-automation',
                 '--disable-features=VizDisplayCompositor',
 
                 // WebRTC 隐私保护
@@ -201,34 +199,21 @@ class Browser {
                 '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
 
                 // 性能和稳定性（保持自然）
-                '--disable-background-timer-throttling=false',
-                '--disable-backgrounding-occluded-windows=false',
-                '--disable-renderer-backgrounding=false',
                 '--enable-features=NetworkService,NetworkServiceLogging',
                 '--force-color-profile=srgb',
                 '--metrics-recording-only',
                 '--use-mock-keychain',
-
-                // 移除明显的自动化标识
-                // 注释掉这些明显的机器人参数：
-                // '--disable-web-security',
-                // '--disable-features=TranslateUI',
-                // '--disable-plugins',
-                // '--disable-extensions',
-                // '--disable-sync',
-                // '--disable-background-networking',
-                // '--no-default-browser-check',
 
                 // 保留必要的稳定性参数
                 '--no-first-run',
                 '--disable-gpu',
                 '--memory-pressure-off',
                 '--max_old_space_size=4096',
-
-                // 新增自然浏览器行为
-                '--enable-automation=false',
-                '--password-store=basic',
-                '--disable-component-extensions-with-background-pages=false'
+                '--password-store=basic'
+                // NOTE: removed the malformed/contradictory switches that previously lived here
+                // (--exclude-switches=enable-automation, --disable-automation, --enable-automation=false,
+                // and several '...=false'-suffixed flags). Chromium boolean switches take no '=false'
+                // value, so those were no-ops at best and an inconsistent launch signature at worst.
             ]
         })
 

@@ -6,6 +6,11 @@ import { log } from './Logger'
 import { ChromeVersion, EdgeVersion } from '../interfaces/UserAgentUtil'
 
 const NOT_A_BRAND_VERSION = '99'
+// GREASE brand string — MUST be byte-identical everywhere it appears (navigator.userAgentData AND
+// the sec-ch-ua* HTTP headers). A real browser derives both from one value; emitting two different
+// GREASE spellings for one client (this code used 'Not/A)Brand' in JS but 'Not=A?Brand' in headers)
+// is impossible on a genuine browser and a clean automation tell.
+const GREASE_BRAND = 'Not/A)Brand'
 
 export async function getUserAgent(isMobile: boolean) {
     const system = getSystemComponents(isMobile)
@@ -20,14 +25,16 @@ export async function getUserAgent(isMobile: boolean) {
     const uaMetadata = {
         isMobile,
         platform: isMobile ? 'Android' : 'Windows',
+        // Order mirrors a real Edge client (Edge, GREASE, Chromium); the sec-ch-ua* headers are
+        // derived from these same arrays in updateFingerprintUserAgent so JS and headers always agree.
         fullVersionList: [
-            { brand: 'Not/A)Brand', version: `${NOT_A_BRAND_VERSION}.0.0.0` },
             { brand: 'Microsoft Edge', version: app['edge_version'] },
+            { brand: GREASE_BRAND, version: `${NOT_A_BRAND_VERSION}.0.0.0` },
             { brand: 'Chromium', version: app['chrome_version'] }
         ],
         brands: [
-            { brand: 'Not/A)Brand', version: NOT_A_BRAND_VERSION },
             { brand: 'Microsoft Edge', version: app['edge_major_version'] },
+            { brand: GREASE_BRAND, version: NOT_A_BRAND_VERSION },
             { brand: 'Chromium', version: app['chrome_major_version'] }
         ],
         platformVersion,
@@ -169,16 +176,20 @@ export async function getAppComponents(isMobile: boolean) {
 export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprintWithHeaders, isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {
     try {
         const userAgentData = await getUserAgent(isMobile)
-        const componentData = await getAppComponents(isMobile)
 
         //@ts-expect-error Errors due it not exactly matching
         fingerprint.fingerprint.navigator.userAgentData = userAgentData.userAgentMetadata
         fingerprint.fingerprint.navigator.userAgent = userAgentData.userAgent
         fingerprint.fingerprint.navigator.appVersion = userAgentData.userAgent.replace(`${fingerprint.fingerprint.navigator.appCodeName}/`, '')
 
+        // Derive the client-hint headers from the SAME brand arrays used for navigator.userAgentData,
+        // so the GREASE brand string, versions and ordering are guaranteed identical across JS + HTTP.
+        const formatBrands = (list: Array<{ brand: string, version: string }>): string =>
+            list.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
+
         fingerprint.headers['user-agent'] = userAgentData.userAgent
-        fingerprint.headers['sec-ch-ua'] = `"Microsoft Edge";v="${componentData.edge_major_version}", "Not=A?Brand";v="${componentData.not_a_brand_major_version}", "Chromium";v="${componentData.chrome_major_version}"`
-        fingerprint.headers['sec-ch-ua-full-version-list'] = `"Microsoft Edge";v="${componentData.edge_version}", "Not=A?Brand";v="${componentData.not_a_brand_version}", "Chromium";v="${componentData.chrome_version}"`
+        fingerprint.headers['sec-ch-ua'] = formatBrands(userAgentData.userAgentMetadata.brands)
+        fingerprint.headers['sec-ch-ua-full-version-list'] = formatBrands(userAgentData.userAgentMetadata.fullVersionList)
 
         /*
         Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36 EdgA/129.0.0.0

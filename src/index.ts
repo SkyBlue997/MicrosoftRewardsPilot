@@ -1,3 +1,6 @@
+// MUST be first: arms the rebrowser anti-detection patches before rebrowser-playwright is loaded.
+import './rebrowser-env'
+
 import cluster from 'cluster'
 import { Page } from 'rebrowser-playwright'
 
