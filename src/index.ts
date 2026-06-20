@@ -1,5 +1,5 @@
 import cluster from 'cluster'
-import { Page, BrowserContext } from 'rebrowser-playwright'
+import { Page } from 'rebrowser-playwright'
 
 import Browser, { ManagedBrowser } from '../browser/Browser'
 import BrowserFunc from '../browser/BrowserFunc'
@@ -16,10 +16,9 @@ import { RewardsApi } from './rewards-api/RewardsApi'
 import { SearchRunner } from './rewards-api/SearchRunner'
 
 import { Account } from '../interfaces/Account'
-import { DashboardData } from '../interfaces/DashboardData'
 import Axios from '../utils/Axios'
 import { StartupConfig } from '../utils/StartupConfig'
-import { TwoFactorAuthRequiredError, AccountLockedError, LoginTimeoutError } from '../interfaces/Errors'
+import { TwoFactorAuthRequiredError, LoginTimeoutError } from '../interfaces/Errors'
 
 
 // Main bot class
@@ -34,9 +33,6 @@ export class MicrosoftRewardsBot {
     }
     public isMobile: boolean
     public homePage!: Page
-
-    private pointsCanCollect: number = 0
-    private pointsInitial: number = 0
 
     private activeWorkers: number
     private activeManagedBrowsers: Map<string, Set<ManagedBrowser>> = new Map()
@@ -422,7 +418,6 @@ export class MicrosoftRewardsBot {
 
             const earner = new RewardsEarner(this, this.accessToken)
             const result = await earner.run()
-            this.pointsInitial = result.balance
             log(this.isMobile, 'MAIN-POINTS', `Desktop activities done: claimed ${result.claimed}, +${result.pointsGained} points (balance ${result.balance})`)
 
             // Earn search points with real, human-paced Bing searches (search is not claimable via the API)
@@ -462,203 +457,75 @@ export class MicrosoftRewardsBot {
     }
 
     // Mobile
-    async Mobile(account: Account, retryCount = 0): Promise<void> {
-        // Mobile activities (check-in, read-to-earn) are now claimed account-wide via the dapi API in
-        // Desktop(); mobile search is not yet ported to the new Rewards SPA. Skip the mobile flow for
-        // now to avoid a redundant second login (anti-throttle) and the broken DOM dashboard.
-        log(this.isMobile, 'MAIN', 'Mobile flow skipped (activities handled via API in desktop; mobile search rework pending)')
-        if (account && retryCount >= 0) return
-        // 正确读取重试设置，支持0值
-        const maxRetries = this.config.searchSettings?.retryMobileSearchAmount !== undefined
-            ? this.config.searchSettings.retryMobileSearchAmount
-            : 2
-        for (let attempt = retryCount; attempt <= maxRetries; attempt++) {
-            let managedBrowser: ManagedBrowser | null = null
-            let sessionStable = false
+    async Mobile(account: Account): Promise<void> {
+        if (this.config.workers.doMobileSearch === false) {
+            log(this.isMobile, 'MAIN', 'Mobile search disabled in config')
+            return
+        }
 
+        // Mobile search only earns points when the dashboard actually offers a MobileSearch promotion
+        // (Level 2+). At Level 1 it doesn't, so spinning up a second browser + sign-in would earn nothing
+        // and just adds an unnecessary login (throttle / bot-score risk). When the desktop run already
+        // fetched a token, reuse it to cheaply check, and skip mobile entirely if there is nothing to earn.
+        if (this.accessToken) {
             try {
-                managedBrowser = await this.browserFactory.createBrowser(account.proxy, account.email)
-                this.registerManagedBrowser(managedBrowser)
-                this.homePage = await managedBrowser.context.newPage()
-
-                log(this.isMobile, 'MAIN', `Starting mobile browser (attempt ${attempt + 1}/${maxRetries + 1})`)
-
-                // Login into MS Rewards, then go to rewards homepage
-                await this.login.login(this.homePage, account.email, account.password)
-                sessionStable = true
-                this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
-
-                await this.browser.func.goHome(this.homePage)
-
-                const data = await this.browser.func.getDashboardData()
-                this.pointsInitial = data.userStatus.availablePoints
-
-                const browserEnarablePoints = await this.browser.func.getBrowserEarnablePoints()
-                const appEarnablePoints = await this.browser.func.getAppEarnablePoints(this.accessToken)
-
-                this.pointsCanCollect = browserEnarablePoints.mobileSearchPoints + appEarnablePoints.totalEarnablePoints
-
-                log(this.isMobile, 'MAIN-POINTS', `You can earn ${this.pointsCanCollect} points today (Browser: ${browserEnarablePoints.mobileSearchPoints} points, App: ${appEarnablePoints.totalEarnablePoints} points)`)
-
-                // If runOnZeroPoints is false and 0 points to earn, don't continue
-                if (!this.config.runOnZeroPoints && this.pointsCanCollect === 0) {
-                    log(this.isMobile, 'MAIN', 'No points to earn and "runOnZeroPoints" is set to "false", stopping!', 'log', 'yellow')
+                const data = await new RewardsApi(this, this.accessToken).getData()
+                const hasMobileSearch = data.promotions.some(p => p.type === 'search' && p.classificationTag === 'MobileSearch')
+                if (!hasMobileSearch) {
+                    log(this.isMobile, 'MAIN', 'No mobile-search points available at this account level — skipping mobile browser')
                     return
                 }
-
-                // Do daily check in
-                if (this.config.workers.doDailyCheckIn) {
-                    try {
-                        log(this.isMobile, 'MOBILE-TASK', 'Starting Daily Check-In...')
-                        await this.activities.doDailyCheckIn(this.accessToken, data)
-                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Daily Check-In')
-                    } catch (error) {
-                        log(this.isMobile, 'MOBILE-TASK', `❌ Daily Check-In failed: ${error}`, 'error')
-                    }
-                } else {
-                    log(this.isMobile, 'MOBILE-TASK', 'Daily Check-In disabled in config')
-                }
-
-                // Do read to earn
-                if (this.config.workers.doReadToEarn) {
-                    try {
-                        log(this.isMobile, 'MOBILE-TASK', 'Starting Read to Earn...')
-                        await this.activities.doReadToEarn(this.accessToken, data)
-                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Read to Earn')
-                    } catch (error) {
-                        log(this.isMobile, 'MOBILE-TASK', `❌ Read to Earn failed: ${error}`, 'error')
-                    }
-                } else {
-                    log(this.isMobile, 'MOBILE-TASK', 'Read to Earn disabled in config')
-                }
-
-                let remainingMobileSearchPoints = 0
-                if (this.config.workers.doMobileSearch) {
-                    try {
-                        log(this.isMobile, 'MOBILE-TASK', 'Starting Mobile Search...')
-                        remainingMobileSearchPoints = await this.performMobileSearches(managedBrowser.context, data)
-                        log(this.isMobile, 'MOBILE-TASK', '✅ Completed Mobile Search')
-                    } catch (error) {
-                        log(this.isMobile, 'MOBILE-TASK', `❌ Mobile Search failed: ${error}`, 'error')
-                        throw error
-                    }
-                } else {
-                    log(this.isMobile, 'MOBILE-TASK', 'Mobile Search disabled in config')
-                }
-
-                const afterPointAmount = await this.browser.func.getCurrentPoints()
-
-                log(this.isMobile, 'MAIN-POINTS', `The script collected ${afterPointAmount - this.pointsInitial} points today`)
-
-                if (remainingMobileSearchPoints > 0) {
-                    if (attempt < maxRetries) {
-                        log(this.isMobile, 'MAIN', `Mobile search incomplete (attempt ${attempt + 1}/${maxRetries + 1}). Retrying with new browser...`, 'log', 'yellow')
-                        log(this.isMobile, 'MOBILE-SEARCH-RETRY', `${remainingMobileSearchPoints} points still need to be earned`, 'warn')
-                        await this.utils.wait(5000)
-                        continue
-                    }
-
-                    log(this.isMobile, 'MAIN', `Max retry limit of ${maxRetries + 1} reached. Mobile search may be incomplete.`, 'warn')
-                    log(this.isMobile, 'MOBILE-SEARCH-FINAL', `${remainingMobileSearchPoints} points were not earned after ${maxRetries + 1} attempts`, 'warn')
-                }
-
-                return
             } catch (error) {
-                // 特殊处理OAuth授权超时错误
-                if (error instanceof LoginTimeoutError || (error instanceof Error && error.message.includes('OAuth authorization timeout'))) {
-                    log(this.isMobile, 'MOBILE-OAUTH', `OAuth timeout for ${account.email}: ${error.message}`, 'warn')
-                    log(this.isMobile, 'MOBILE-OAUTH', 'Mobile task requires user interaction - skipping', 'warn')
-                    throw new TwoFactorAuthRequiredError('Mobile OAuth requires user interaction - skipping mobile tasks for this account')
-                }
-
-                // 特殊处理2FA相关错误，直接重新抛出
-                if (error instanceof TwoFactorAuthRequiredError || error instanceof AccountLockedError) {
-                    throw error
-                }
-
-                throw error
-            } finally {
-                if (managedBrowser) {
-                    try {
-                        await this.closeManagedBrowser(managedBrowser, sessionStable)
-                    } catch (closeError) {
-                        log(this.isMobile, 'MOBILE-CLEANUP', `Failed to close managed browser in finally: ${closeError}`, 'error')
-                    }
-                }
+                // Token check failed — fall through to the full flow (it also no-ops gracefully if there is no promotion)
+                log(this.isMobile, 'MAIN', `Mobile pre-check failed (${error}); proceeding with full mobile flow`, 'warn')
             }
         }
-    }
 
-    /**
-     * 执行Mobile搜索任务
-     */
-    private async performMobileSearches(browser: BrowserContext, data: DashboardData): Promise<number> {
-        // If no mobile searches data found, stop (Does not always exist on new accounts)
-        if (!data.userStatus.counters.mobileSearch) {
-            log(this.isMobile, 'MAIN', 'Unable to fetch search points, your account is most likely too "new" for this! Try again later!', 'warn')
-            return 0
-        }
-
-        // 记录初始搜索积分状态
-        const initialMobileSearchPoints = data.userStatus.counters.mobileSearch[0]
-        if (initialMobileSearchPoints) {
-            const remainingPoints = initialMobileSearchPoints.pointProgressMax - initialMobileSearchPoints.pointProgress
-            log(this.isMobile, 'MOBILE-SEARCH-INITIAL', `Initial mobile search status: ${initialMobileSearchPoints.pointProgress}/${initialMobileSearchPoints.pointProgressMax} points (${remainingPoints} remaining)`)
-        }
-
-        // Open a new tab to where the tasks are going to be completed
-        const workerPage = await browser.newPage()
+        let managedBrowser: ManagedBrowser | null = null
+        let sessionStable = false
 
         try {
-            // Go to homepage on worker page
-            await this.browser.func.goHome(workerPage)
+            managedBrowser = await this.browserFactory.createBrowser(account.proxy, account.email)
+            this.registerManagedBrowser(managedBrowser)
+            this.homePage = await managedBrowser.context.newPage()
 
-            log(this.isMobile, 'MOBILE-SEARCH-START', 'Starting mobile search execution...')
-            await this.activities.doSearch(workerPage, data)
-            log(this.isMobile, 'MOBILE-SEARCH-END', 'Mobile search execution completed')
+            log(this.isMobile, 'MAIN', 'Starting mobile browser')
 
-            // 等待一段时间让积分更新
-            await this.utils.wait(3000)
+            // Reuses the saved desktop session when possible (fast, no credential re-entry / anti-throttle)
+            await this.login.login(this.homePage, account.email, account.password)
+            sessionStable = true
+            this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
 
-            // Fetch current search points with enhanced checking
-            log(this.isMobile, 'MOBILE-SEARCH-CHECK', 'Checking mobile search completion status...')
-            const currentSearchCounters = await this.browser.func.getSearchPoints()
-            const mobileSearchPoints = currentSearchCounters.mobileSearch?.[0]
-
-            if (mobileSearchPoints) {
-                const remainingPoints = mobileSearchPoints.pointProgressMax - mobileSearchPoints.pointProgress
-                log(this.isMobile, 'MOBILE-SEARCH-STATUS', `Final mobile search status: ${mobileSearchPoints.pointProgress}/${mobileSearchPoints.pointProgressMax} points (${remainingPoints} remaining)`)
-
-                // 检查是否还有剩余积分
-                if (remainingPoints > 0) {
-                    // 如果重试次数为0，直接报告完成状态而不重试
-                    return remainingPoints
-                } else {
-                    log(this.isMobile, 'MAIN', 'Mobile searches completed successfully - all points earned!', 'log', 'green')
-                    return 0
-                }
-            } else {
-                log(this.isMobile, 'MOBILE-SEARCH-ERROR', 'Unable to verify mobile search completion - no mobile search data found', 'warn')
-                return 0
+            // Mobile search points via real, human-paced searches (activities are claimed in Desktop()).
+            const searchPage = await managedBrowser.context.newPage()
+            try {
+                const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage)
+                await searcher.run()
+            } finally {
+                await searchPage.close().catch(() => { })
             }
+
+            await saveSessionData(this.config.sessionPath, managedBrowser.context, account.email, this.isMobile)
+            await this.closeManagedBrowser(managedBrowser, true)
+            managedBrowser = null
 
         } catch (error) {
-            log(this.isMobile, 'MOBILE-SEARCH', `Mobile search error: ${error}`, 'error')
-            throw error
-        } finally {
-            // 确保worker页面被关闭
-            try {
-                if (typeof workerPage !== 'undefined') {
-                    await workerPage.close()
-                }
-            } catch (closeError) {
-                // 忽略关闭错误
+            // Mobile is best-effort (desktop already earned the main points): an OAuth/2FA prompt or any
+            // mobile failure is logged and skipped rather than failing the whole account.
+            if (error instanceof LoginTimeoutError || (error instanceof Error && error.message.includes('OAuth authorization timeout'))) {
+                log(this.isMobile, 'MOBILE-OAUTH', `Mobile OAuth needs interaction for ${account.email} — skipping mobile search`, 'warn')
+            } else {
+                log(this.isMobile, 'MOBILE-ERROR', `Mobile task failed for ${account.email}: ${error}`, 'warn')
             }
-
-            // Browser cleanup is handled by the outer catch block
+            if (managedBrowser) {
+                try {
+                    await this.closeManagedBrowser(managedBrowser, sessionStable)
+                } catch (closeError) {
+                    log(this.isMobile, 'MOBILE-CLEANUP', `Failed to close managed browser: ${closeError}`, 'warn')
+                }
+            }
         }
     }
-
 }
 
 async function main() {

@@ -56,8 +56,11 @@ export class RewardsEarner {
                 } else {
                     const res = await this.api.claim(p.offerId)
                     balance = res.balance || balance
-                    if (res.duplicate) {
-                        this.log(`• "${p.title}" already completed`)
+                    if (res.duplicate || res.points === 0) {
+                        // No points credited: already completed today, future-dated/locked (e.g. a daily
+                        // set or explore-on-Bing card that unlocks tomorrow), or one that needs a real
+                        // page visit. This is expected and not an error — there is simply nothing to earn.
+                        this.log(`• "${p.title}" — no points (already done, locked, or needs a visit)`)
                     } else {
                         claimedCount++
                         totalGained += res.points
@@ -68,8 +71,13 @@ export class RewardsEarner {
             } catch (error) {
                 this.log(`❌ Failed "${p.title}" (${p.offerId}): ${error}`, 'warn')
             }
-            // Only pause after an activity that actually completed (no need to "wait" for a duplicate/no-op)
-            if (didClaim) await this.humanDelay()
+            // Space the claims like a human: a real pause after a genuine completion, a short jitter
+            // after a no-op (keeps the POSTs from firing in a burst without wasting minutes on nothing).
+            if (didClaim) {
+                await this.humanDelay()
+            } else {
+                await this.bot.utils.wait(this.bot.utils.randomNumber(1500, 4000))
+            }
         }
 
         this.log(`Activities done — claimed ${claimedCount}, +${totalGained} points (balance ~${balance})`, 'log', 'green')
