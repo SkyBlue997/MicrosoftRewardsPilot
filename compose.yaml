@@ -10,6 +10,11 @@ services:
       - ./sessions:/usr/src/microsoftrewardspilot/sessions # Optional, saves your login session
     environment:
       - NODE_ENV=production
+      # Prefer odd, non-round, spread-out hours over 9,16 so runs don't cluster at obvious times.
       - CRON_SCHEDULE=0 9,16 * * * # Customize your schedule, use crontab.guru for formatting
       - RUN_ON_START=true # Runs the script on container startup
       - TZ=Asia/Tokyo # Set your timezone for proper scheduling
+      # Anti-detection: arm rebrowser's Runtime.enable patch (src/rebrowser-env.ts sets these as
+      # defaults too; declared here so it's explicit/overridable in the deployed container).
+      - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
+      - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util

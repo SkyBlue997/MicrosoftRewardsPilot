@@ -17,9 +17,11 @@ if ! flock -n 9; then
     exit 0
 fi
 
-# Define the minimum and maximum wait times in seconds
-MINWAIT=$((5*60))  # 5 minutes
-MAXWAIT=$((50*60)) # 50 minutes
+# Define the minimum and maximum wait times in seconds.
+# A wide window matters: cron fires at fixed wall-clock hours, so this random sleep is what keeps the
+# actual run start from clustering into the same few minutes every day (an easy server-side tell).
+MINWAIT=$((3*60))  # 3 minutes
+MAXWAIT=$((85*60)) # 85 minutes
 
 # Calculate a random sleep time within the specified range
 SLEEPTIME=$((MINWAIT + RANDOM % (MAXWAIT - MINWAIT)))

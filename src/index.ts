@@ -128,6 +128,15 @@ export class MicrosoftRewardsBot {
         let completedAccounts = 0
         let failedAccounts = 0
 
+        // Randomise account order each run so accounts sharing an egress IP/proxy don't present a
+        // stable processing sequence (and fixed inter-account time offsets) day after day.
+        for (let i = accounts.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1))
+            const tmp = accounts[i] as Account
+            accounts[i] = accounts[j] as Account
+            accounts[j] = tmp
+        }
+
         for (let i = 0; i < accounts.length; i++) {
             const account = accounts[i]
             if (!account) {
