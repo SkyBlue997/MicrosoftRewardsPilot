@@ -10,6 +10,7 @@ import { Counters, DashboardData, MorePromotion, PromotionalItem } from './../in
 import { QuizData } from './../interfaces/QuizData'
 import { AppUserData } from '../interfaces/AppUserData'
 import { EarnablePoints } from '../interfaces/Points'
+import { GeoLanguageDetector } from '../utils/GeoLanguage'
 
 
 export default class BrowserFunc {
@@ -268,7 +269,7 @@ export default class BrowserFunc {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'X-Rewards-Country': geoLocale,
-                    'X-Rewards-Language': 'en'
+                    'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry(geoLocale.toUpperCase())
                 }
             }
 

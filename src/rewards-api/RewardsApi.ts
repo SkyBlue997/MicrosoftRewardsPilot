@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 import { AxiosRequestConfig } from 'axios'
 
+import { GeoLanguageDetector } from '../../utils/GeoLanguage'
 import { MicrosoftRewardsBot } from '../index'
 
 const DAPI_BASE = 'https://prod.rewardsplatform.microsoft.com/dapi'
@@ -47,7 +48,10 @@ export class RewardsApi {
         const h: Record<string, string> = {
             'Authorization': `Bearer ${this.accessToken}`,
             'X-Rewards-Country': this.country,
-            'X-Rewards-Language': 'en'
+            // Match the account's real market instead of always claiming English (country said jp while
+            // language said en). Verified safe: en/ja/ja-JP all return identical promotions — only the
+            // response titles localize. getLanguageFromCountry falls back to 'en' for unknown markets.
+            'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry((this.country || 'us').toUpperCase())
         }
         if (json) h['Content-Type'] = 'application/json'
         return h

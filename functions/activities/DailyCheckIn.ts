@@ -4,6 +4,7 @@ import { AxiosRequestConfig } from 'axios'
 import { Workers } from '../Workers'
 
 import { DashboardData } from '../../interfaces/DashboardData'
+import { GeoLanguageDetector } from '../../utils/GeoLanguage'
 
 
 export class DailyCheckIn extends Workers {
@@ -31,7 +32,7 @@ export class DailyCheckIn extends Workers {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
                     'X-Rewards-Country': geoLocale,
-                    'X-Rewards-Language': 'en'
+                    'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry(geoLocale.toUpperCase())
                 },
                 data: JSON.stringify(jsonData)
             }
