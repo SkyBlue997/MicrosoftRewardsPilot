@@ -285,7 +285,7 @@ export class GeoLanguageDetector {
     /**
      * 根据国家代码获取主要语言
      */
-    private static getLanguageFromCountry(countryCode: string): string {
+    static getLanguageFromCountry(countryCode: string): string {
         const countryLanguageMap: { [key: string]: string } = {
             // 英语国家
             'US': 'en', 'GB': 'en', 'CA': 'en', 'AU': 'en', 'NZ': 'en', 'IE': 'en', 'ZA': 'en',

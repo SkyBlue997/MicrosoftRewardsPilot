@@ -427,7 +427,7 @@ export class MicrosoftRewardsBot {
             if (this.config.workers.doDesktopSearch !== false) {
                 const searchPage = await managedBrowser.context.newPage()
                 try {
-                    const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage)
+                    const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage, account.email)
                     await searcher.run()
                 } catch (searchError) {
                     log(this.isMobile, 'SEARCH', `Desktop search failed: ${searchError}`, 'error')
@@ -502,7 +502,7 @@ export class MicrosoftRewardsBot {
             // Mobile search points via real, human-paced searches (activities are claimed in Desktop()).
             const searchPage = await managedBrowser.context.newPage()
             try {
-                const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage)
+                const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage, account.email)
                 await searcher.run()
             } finally {
                 await searchPage.close().catch(() => { })
