@@ -117,7 +117,7 @@ services:
 ```
 
 ### 智能搜索配置
-> dapi 流程下，搜索间隔由内置的对数正态延迟系统决定（不读 `searchDelay`），打字真实度为固定约 2% 错误率（不读 `humanBehavior`）；查询语言由账户市场自动本地化（ja/en/zh-CN/vi 有完整查询库）。以下为实际生效的键：
+> 搜索间隔（对数正态延迟）与拟人打字均为内置；查询语言按账户市场自动本地化（ja/en/zh-CN/vi 有完整查询库）。可调键：
 ```json
 {
   "searchSettings": {
@@ -134,17 +134,13 @@ services:
 }
 ```
 ### 任务配置
-> dapi 流程下，实际生效的开关只有 `doDesktopSearch` / `doMobileSearch` / `doMorePromotions`（探索任务）。每日任务集、签到、阅读赚取等可领活动会**自动领取**，对应开关当前为占位（不生效）。
+> 其余可领活动（每日任务集、签到、阅读赚取、谜题等）会自动领取，无需开关。
 ```json
 {
   "workers": {
-    "doDesktopSearch": true,   // 桌面端搜索（生效）
-    "doMobileSearch": true,    // 移动端搜索（生效，L2 起）
-    "doMorePromotions": true,  // Explore on Bing / 推广任务（生效）
-    "doDailySet": true,        // 每日任务集（自动领取，开关占位）
-    "doPunchCards": true,      // 打卡任务（占位）
-    "doDailyCheckIn": true,    // 每日签到（自动领取，开关占位）
-    "doReadToEarn": true       // 阅读赚取（自动领取，开关占位）
+    "doDesktopSearch": true,   // 桌面端搜索
+    "doMobileSearch": true,    // 移动端搜索（L2 起）
+    "doMorePromotions": true   // Explore on Bing / 推广任务
   }
 }
 ```
@@ -250,22 +246,6 @@ npx ts-node src/helpers/manual-2fa-helper.ts
 }
 ```
 
-### **测试工具**
-
-```bash
-# 配置 / 地理 / 时区测试（用项目已装的 ts-node，对应 npm 脚本）
-npm run test-config
-npm run test-geo
-npm run test-timezone
-
-# 以下 JS 测试加载编译产物，运行前需先 npm run build
-npm run build
-node tests/popup-handler-test.js      # 弹窗处理
-node tests/popup-loop-fix-test.js     # 弹窗无限循环修复验证
-node tests/passkey-handling-test.js   # Passkey处理
-```
-> 项目装的是 `ts-node`（非 `tsx`）；直接跑 `.ts` 请用 `npx ts-node <文件>` 或上面的 npm 脚本。
-
 ### **常见问题**
 
 <details>
@@ -364,10 +344,10 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 
 ## 完整配置示例
 
-> 与仓库的 `config/config.json.example` 对应（[快速开始](#快速开始)已让你 `cp` 它）。**注意：dapi 流程下以下键为占位、不生效**：`searchDelay`、`scrollRandomResults`、`clickRandomResults`、`retryMobileSearchAmount`、`multiLanguage.fallbackLanguage`/`supportedLanguages`、整个 `chinaRegionAdaptation`、`passkeyHandling.skipPasskeySetup`/`useDirectNavigation`/`logPasskeyHandling`，以及 `workers` 中除 `doDesktopSearch`/`doMobileSearch`/`doMorePromotions` 外的开关（其余活动自动领取）。
+> 完整模板见仓库的 `config/config.json.example`（[快速开始](#快速开始)已让你 `cp` 它）。下面仅列出实际生效的键：
 
 <details>
-<summary><strong>查看完整 config.json 示例</strong> （点击展开）</summary>
+<summary><strong>有效配置项</strong> （点击展开）</summary>
 
 ```json
 {
@@ -382,13 +362,9 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
     "desktop": true
   },
   "workers": {
-    "doDailySet": true,
-    "doMorePromotions": true,
-    "doPunchCards": true,
     "doDesktopSearch": true,
     "doMobileSearch": true,
-    "doDailyCheckIn": true,
-    "doReadToEarn": true
+    "doMorePromotions": true
   },
   "searchOnBingLocalQueries": true,
   "globalTimeout": "180min",
@@ -398,30 +374,15 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   },
   "searchSettings": {
     "useGeoLocaleQueries": true,
-    "scrollRandomResults": true,
-    "clickRandomResults": true,
-    "searchDelay": {
-      "min": "180s",
-      "max": "360s"
-    },
-    "retryMobileSearchAmount": 0,
     "multiLanguage": {
       "enabled": true,
-      "autoDetectLocation": true,
-      "fallbackLanguage": "ja",
-      "supportedLanguages": ["ja", "en", "zh-CN", "ko", "de", "fr", "es"]
+      "autoDetectLocation": true
     },
     "autoTimezone": {
       "enabled": true,
       "setOnStartup": true,
       "validateMatch": true,
       "logChanges": true
-    },
-    "chinaRegionAdaptation": {
-      "enabled": false,
-      "useBaiduTrends": true,
-      "useWeiboTrends": true,
-      "fallbackToLocalQueries": true
     }
   },
   "logExcludeFunc": [
@@ -448,10 +409,7 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   },
   "passkeyHandling": {
     "enabled": true,
-    "maxAttempts": 5,
-    "skipPasskeySetup": true,
-    "useDirectNavigation": true,
-    "logPasskeyHandling": true
+    "maxAttempts": 5
   }
 }
 ```

@@ -12,10 +12,6 @@
     "start": "node ./dist/src/index.js",
     "ts-start": "ts-node ./src/index.ts",
     "dev": "ts-node ./src/index.ts -dev",
-    "test-config": "ts-node ./tests/test-dynamic-config.ts",
-    "test-geo": "ts-node ./tests/test-geo-language.ts",
-    "test-timezone": "ts-node ./tests/test-timezone-auto.ts",
-    "debug-quiz": "ts-node ./src/helpers/quiz-debug.ts",
     "kill-chrome-win": "powershell -Command \"Get-Process | Where-Object { $_.MainModule.FileVersionInfo.FileDescription -eq 'Google Chrome for Testing' } | ForEach-Object { Stop-Process -Id $_.Id -Force }\"",
     "create-docker": "docker build -t microsoftrewardspilot-docker ."
   },
