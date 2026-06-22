@@ -142,39 +142,69 @@ export default class BrowserFunc {
                 )
             ])
 
-            const scriptContent = await this.bot.homePage.evaluate(() => {
-                const scripts = Array.from(document.querySelectorAll('script'))
-                const targetScript = scripts.find(script => script.innerText.includes('var dashboard'))
 
-                return targetScript?.innerText ? targetScript.innerText : null
-            })
-
-            if (!scriptContent) {
-                this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard data not found within script', 'error')
-                throw new Error('Dashboard data not found within script')
-            }
-
-            // Extract the dashboard object from the script content
-            const dashboardData = await this.bot.homePage.evaluate((scriptContent: string) => {
-                // Extract the dashboard object using regex
-                const regex = /var dashboard = (\{.*?\});/
-                const match = regex.exec(scriptContent)
-
-                if (match && match[1]) {
-                    return JSON.parse(match[1])
-                }
-
-            }, scriptContent)
-
-            if (!dashboardData) {
-                this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Unable to parse dashboard script', 'error')
-                throw new Error('Unable to parse dashboard script')
-            }
-
-            this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Successfully fetched dashboard data')
-            return dashboardData
-
-        } catch (error) {
+		    const scriptContent = await this.bot.homePage.evaluate(() => {
+		        const scripts = Array.from(document.querySelectorAll('script'))
+		        const targetScript = scripts.find(script => script.innerText.includes('var dashboard = {'))
+		        return targetScript?.innerText ? targetScript.innerText : null
+		    })
+		
+		    if (!scriptContent) {
+		        this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard data not found within script', 'error')
+		        throw new Error('Dashboard data not found within script')
+		    }
+		
+		    const dashboardData: DashboardData = await this.bot.homePage.evaluate((content: string) => {
+		        try {
+		            const startKey = 'var dashboard = '
+		            const startIndex = content.indexOf(startKey)
+		            if (startIndex === -1) return { _error: 'Start key not found' }
+		
+		            const jsonStart = content.indexOf('{', startIndex)
+		            if (jsonStart === -1) return { _error: 'Opening brace not found' }
+		
+		            let braceCount = 0
+		            let jsonEnd = -1
+		            let inString = false
+		
+		            for (let i = jsonStart; i < content.length; i++) {
+		                const char = content[i]
+		
+		                if (char === '"' && content[i - 1] !== '\\') {
+		                    inString = !inString
+		                    continue
+		                }
+		
+		                if (!inString) {
+		                    if (char === '{') braceCount++
+		                    if (char === '}') braceCount--
+		
+		                    if (braceCount === 0) {
+		                        jsonEnd = i
+		                        break
+		                    }
+		                }
+		            }
+		
+		            if (jsonEnd === -1) return { _error: 'Could not find matching closing brace' }
+		
+		            const jsonStr = content.substring(jsonStart, jsonEnd + 1)
+		            return JSON.parse(jsonStr)
+		
+		        } catch (e: any) {
+		            return { _error: e.message }
+		        }
+		    }, scriptContent)
+		
+		    if (!dashboardData || dashboardData._error) {
+		        const errorMsg = dashboardData?._error || 'Unknown parsing error'
+		        this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Parse Failed: ${errorMsg}`, 'error')
+		        throw new Error(`Unable to parse dashboard script: ${errorMsg}`)
+		    }
+		
+		    this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Successfully fetched dashboard data')
+		    return dashboardData
+		} catch (error) {
             this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Error fetching dashboard data: ${error}`, 'error')
             throw new Error(`Error fetching dashboard data: ${error}`)
         }
