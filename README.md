@@ -135,14 +135,6 @@ services:
       "thinkingPauseEnabled": true, // 思考暂停
       "randomScrollEnabled": true   // 随机滚动
     },
-    "antiDetection": {
-      "ultraMode": true,            // 终极防检测模式
-      "stealthLevel": "ultimate",   // 最高隐身级别
-      "dynamicDelayMultiplier": 4.0,// 动态延迟倍数
-      "humanErrorSimulation": true, // 人类错误模拟
-      "deepPageInteraction": true,  // 深度页面交互
-      "sessionBreaking": true       // 智能会话分段
-    },
     "chinaRegionAdaptation": {
       "enabled": true,              // 启用中国区域适配
       "useBaiduTrends": true,       // 使用百度热搜
@@ -222,8 +214,8 @@ npx tsx src/helpers/manual-2fa-helper.ts
 
 **现象：** 日志显示重复的弹窗检测信息
 ```
-[REWARDS-POPUP] 🎯 Detected Streak Protection Popup
-[REWARDS-POPUP] 🎯 Detected Streak Protection Popup
+[REWARDS-POPUP]  Detected Streak Protection Popup
+[REWARDS-POPUP]  Detected Streak Protection Popup
 ```
 
 **解决方案：**
@@ -290,9 +282,6 @@ node tests/popup-loop-fix-test.js
 
 # Passkey处理功能测试
 node tests/passkey-handling-test.js
-
-# Quiz页面调试（当Quiz失效时使用）
-npx tsx src/helpers/quiz-debug.ts "https://rewards.microsoft.com/quiz/xxx"
 ```
 
 ### **常见问题**
@@ -301,19 +290,10 @@ npx tsx src/helpers/quiz-debug.ts "https://rewards.microsoft.com/quiz/xxx"
 <summary><strong>积分获取受限/检测到自动化行为</strong></summary>
 
 **现象：** 连续多次搜索无积分，或积分获取不完整
-**解决方案：** 系统已自动启用终极防检测模式
-- **AI级别行为模拟**：真实用户错误、搜索犹豫、意外点击
-- **统计学反检测**：非标准时间分布、疲劳算法
-- **深度伪装技术**：设备传感器、Canvas指纹噪声
-- **会话管理**：智能分段、自动休息
-- **预期效果**：4-8小时内恢复95%+积分获取率
-
-</details>
-
-<details>
-<summary><strong>Quiz任务失败</strong></summary>
-
-**解决方案：** 使用 `npx tsx src/helpers/quiz-debug.ts <URL>` 分析页面结构变化
+**说明：** 多数情况并非被检测，而是：
+- **奖励日重置边界（约当地午夜前后）**：dapi 会返回不一致的快照（搜索/阅读在"已重置"和"旧值"间抖动），此时不要跑——在稳定时段（如脚本 cron 的早/晚）运行即可
+- **当日活动已完成**：当天第二次运行多为 +0（正确的幂等表现）
+- 真被风控时：降低运行频率、避免短时间多次登录，本项目的反检测（rebrowser 补丁、指纹一致性、对数正态延迟、本地化查询）会随正常使用恢复
 
 </details>
 
@@ -360,15 +340,13 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 <td width="50%" valign="top">
 
 ### **支持任务**
-- **每日任务集** - 完成所有日常任务
-- **推广任务** - 获取额外积分奖励
-- **打卡任务** - 持续积分累积
-- **桌面端搜索** - 智能搜索查询
-- **移动端搜索** - 移动设备模拟
-- **Quiz 挑战** - 10分、30-40分、选择题、ABC题
-- **投票活动** - 参与社区投票
-- **点击奖励** - 简单点击获取积分
-- **每日签到** - 自动签到打卡
+> 新版 rewards.bing.com 已迁移为 Next.js SPA，旧的 DOM 抓取失效；本项目改为对接 **dapi 后端 API**（活动直接领取）+ 真实搜索/视觉搜索。
+- **每日任务集 / 推广任务 / 谜题问答** - 经 dapi API 直接领取（含每日一言、拼图等）
+- **桌面端搜索** - 真实、拟人节奏的必应搜索，进度读自 dapi
+- **移动端搜索** - 移动设备模拟（Level 2 起，与 PC 共享当日搜索上限）
+- **Explore on Bing** - 经奖励 flyout 的类目搜索完成
+- **视觉搜索** - 自动完成必应视觉搜索活动
+- **每日签到** - 网页签到 + 必应应用签到（两种独立签到）
 - **阅读赚取** - 阅读文章获取积分
 
 </td>
@@ -377,22 +355,22 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 ### **智能特性**
 - **多账户支持** - 集群并行处理
 - **会话存储** - 免重复登录，支持2FA
-- **地理位置检测** - IP检测 + 本地化搜索查询
+- **dapi 后端对接** - 新版 SPA 已无可抓取 DOM，改走 Rewards API
+- **地理位置检测** - IP 检测地区 / 坐标 / 时区
 - **时区同步** - 自动设置匹配时区
-- **多语言支持** - 日语、中文、英语等语言适配
-- **行为模拟** - 打字错误、随机滚动、思考暂停
-- **终极防检测** - AI级别行为模拟、设备传感器注入、Canvas指纹噪声
-- **真实用户模拟** - 错误修正、搜索犹豫、意外点击等人类行为
-- **统计学反检测** - 非标准时间分布、疲劳算法、会话分段
+- **本地化** - 按账户市场本地化查询，并发送对应 `X-Rewards-Language`
+- **rebrowser 反检测** - 启用补丁，消除 Playwright 的 `Runtime.enable` CDP 泄漏
+- **指纹一致性** - fingerprint-injector 注入 + UA/Client-Hints(GREASE) 对齐
+- **拟人行为** - 逐字打字、可变方向滚动、结果点击与停留
+- **拟人延迟** - 对数正态分布的搜索间隔（无区间硬边界）
+- **节奏随机化** - 账户顺序洗牌、运行启动时间抖动
 - **弹窗智能处理** - 自动检测和关闭各种Microsoft Rewards弹窗
 - **Passkey循环绕过** - 自动处理Passkey设置循环问题
-- **Quiz智能适配** - 多重数据获取策略
 - **Docker支持** - 容器化部署
 - **自动重试** - 失败任务智能重试
 - **详细日志** - 完整的执行记录
-- **高性能** - 优化的并发处理
 - **灵活配置** - 丰富的自定义选项
-- **中国大陆优化** - 百度热搜、微博热搜、本地化查询
+- **中文本地化** - 中国账户使用 zh-CN 查询库搜索（与日/英/越同为完整本地化语言）
 
 </td>
 </tr>
@@ -463,25 +441,6 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
       "timeBasedDelayEnabled": true,
       "adaptiveDelayEnabled": true,
       "cautionModeEnabled": true
-    },
-    "antiDetection": {
-      "ultraMode": true,
-      "stealthLevel": "ultimate",
-      "dynamicDelayMultiplier": 4.0,
-      "progressiveBackoff": true,
-      "maxConsecutiveFailures": 1,
-      "cooldownPeriod": "20min",
-      "sessionSimulation": true,
-      "multitaskingEnabled": true,
-      "behaviorRandomization": true,
-      "timeBasedScheduling": true,
-      "humanErrorSimulation": true,
-      "deepPageInteraction": true,
-      "canvasNoise": true,
-      "sensorDataInjection": true,
-      "networkBehaviorMimic": true,
-      "sessionBreaking": true,
-      "realUserErrors": true
     },
     "chinaRegionAdaptation": {
       "enabled": false,
