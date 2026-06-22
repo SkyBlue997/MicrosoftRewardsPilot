@@ -117,6 +117,35 @@ export class RewardsApi {
         return { points: Number(r.activity?.p) || 0, balance: Number(r.balance) || 0, duplicate: !!r.isDuplicate }
     }
 
+    /**
+     * The Bing-app daily check-in (the "必应应用连签" streak): a `type:103` activity with no offerid.
+     * Distinct from the web daily check-in (type:101 + Gamification_Sapphire_DailyCheckIn offerid).
+     * Reverse-engineered from iOS Bing-app traffic; verified live to credit (+15 on a fresh day) with
+     * our own token — `channel` must match the token's context (SAAndroid), not the iOS app's SAIOS.
+     * Returns 0/duplicate once the day's check-in is already done.
+     */
+    async appCheckIn(): Promise<{ points: number, balance: number, duplicate: boolean }> {
+        const payload = {
+            amount: 1,
+            country: this.country,
+            id: randomBytes(32).toString('hex'),
+            type: 103,
+            channel: 'SAAndroid',
+            attributes: {},
+            risk_context: {}
+        }
+        const headers = { ...this.headers(true), 'X-Rewards-AppId': 'SAAndroid', 'X-Rewards-PartnerId': 'startapp' }
+        const req: AxiosRequestConfig = {
+            url: `${DAPI_BASE}/me/activities`,
+            method: 'POST',
+            headers,
+            data: JSON.stringify(payload)
+        }
+        const response = await this.bot.axios.request(req)
+        const r = (response.data && response.data.response) || {}
+        return { points: Number(r.activity?.p) || 0, balance: Number(r.balance) || 0, duplicate: !!r.isDuplicate }
+    }
+
     /** Promotions that can be completed by a single claim (not search, not info/sweepstakes). */
     static isClaimable(p: ApiPromotion): boolean {
         if (p.complete) return false

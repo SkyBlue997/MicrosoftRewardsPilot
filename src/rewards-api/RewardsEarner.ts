@@ -80,6 +80,22 @@ export class RewardsEarner {
             }
         }
 
+        // Bing-app daily check-in (type:103, the "必应应用连签" streak) — separate from the web check-in
+        // claimed in the loop above. Best-effort: credits on a fresh day, no-ops once already done.
+        try {
+            const ci = await this.api.appCheckIn()
+            if (ci.points > 0) {
+                claimedCount++
+                totalGained += ci.points
+                balance = ci.balance || balance
+                this.log(`✅ App check-in (+${ci.points}) | balance ${ci.balance}`, 'log', 'green')
+            } else {
+                this.log('• App check-in — already done today')
+            }
+        } catch (error) {
+            this.log(`App check-in failed: ${error}`, 'warn')
+        }
+
         this.log(`Activities done — claimed ${claimedCount}, +${totalGained} points (balance ~${balance})`, 'log', 'green')
         return { claimed: claimedCount, pointsGained: totalGained, balance }
     }
