@@ -17,6 +17,7 @@ import Activities from '../functions/Activities'
 import { RewardsEarner } from './rewards-api/RewardsEarner'
 import { RewardsApi } from './rewards-api/RewardsApi'
 import { SearchRunner } from './rewards-api/SearchRunner'
+import { ExploreRunner } from './rewards-api/ExploreRunner'
 
 import { Account } from '../interfaces/Account'
 import Axios from '../utils/Axios'
@@ -436,7 +437,19 @@ export class MicrosoftRewardsBot {
             if (this.config.workers.doDesktopSearch !== false) {
                 const searchPage = await managedBrowser.context.newPage()
                 try {
-                    const searcher = new SearchRunner(this, new RewardsApi(this, this.accessToken), searchPage, account.email)
+                    const api = new RewardsApi(this, this.accessToken)
+                    // Explore-on-Bing offers credit via a category search launched from the rewards flyout.
+                    // Do them first (best-effort) — these searches also count toward the PC search cap, so
+                    // SearchRunner afterwards only tops up whatever's left.
+                    if (this.config.workers.doMorePromotions !== false) {
+                        try {
+                            const explorer = new ExploreRunner(this, api, searchPage)
+                            await explorer.run()
+                        } catch (exploreError) {
+                            log(this.isMobile, 'EXPLORE', `Explore-on-Bing failed: ${exploreError}`, 'warn')
+                        }
+                    }
+                    const searcher = new SearchRunner(this, api, searchPage, account.email)
                     await searcher.run()
                 } catch (searchError) {
                     log(this.isMobile, 'SEARCH', `Desktop search failed: ${searchError}`, 'error')
