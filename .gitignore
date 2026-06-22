@@ -12,3 +12,6 @@ config/accounts.json
 config/accounts.dev.json
 config/config.json
 config/config.dev.json
+# local RE artifact, do not commit
+edge.apk
+*.apk
