@@ -81,15 +81,19 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/accounts.json:ro
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config.json:ro
-      - ./sessions:/usr/src/microsoftrewardspilot/dist/browser/sessions
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./sessions:/usr/src/microsoftrewardspilot/sessions  # 保存登录会话
     environment:
+      - NODE_ENV=production
       - TZ=Asia/Tokyo  # 根据地理位置设置
-      - CRON_SCHEDULE=0 9,16 * * *  # 每天9点和16点运行
-      - ENABLE_GEO_DETECTION=true  # 启用地理位置检测
-      - AUTO_TIMEZONE=true  # 启用自动时区设置
+      - CRON_SCHEDULE=0 9,16 * * *  # 建议改成不那么"整点"的分散时间，避免每天同一时刻扎堆；run_daily.sh 还会再叠加 3-85 分钟随机抖动
+      - RUN_ON_START=true  # 容器启动时立即跑一次
+      # 反检测：启用 rebrowser 的 Runtime.enable 修复（src/rebrowser-env.ts 已内置默认值，这里显式声明便于覆盖）
+      - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
+      - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
+> 地理位置/时区由 `config.json` 的 `searchSettings.multiLanguage.autoDetectLocation` 与 `searchSettings.autoTimezone` 控制（不是环境变量）。
 
 </details>
 
@@ -113,47 +117,34 @@ services:
 ```
 
 ### 智能搜索配置
+> dapi 流程下，搜索间隔由内置的对数正态延迟系统决定（不读 `searchDelay`），打字真实度为固定约 2% 错误率（不读 `humanBehavior`）；查询语言由账户市场自动本地化（ja/en/zh-CN/vi 有完整查询库）。以下为实际生效的键：
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // 地理位置查询
+    "useGeoLocaleQueries": true,    // 仅影响请求头 X-Rewards-Country/Language
     "multiLanguage": {
       "enabled": true,              // 多语言支持
-      "autoDetectLocation": true,   // 自动检测位置
-      "fallbackLanguage": "en"     // 备用语言
+      "autoDetectLocation": true    // 自动检测位置（决定查询与时区本地化）
     },
     "autoTimezone": {
       "enabled": true,              // 自动时区
       "setOnStartup": true          // 启动时设置
-    },
-    "searchDelay": {
-      "min": "45s",                 // 最小延迟
-      "max": "2.5min"              // 最大延迟
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.12,      // 打字错误率
-      "thinkingPauseEnabled": true, // 思考暂停
-      "randomScrollEnabled": true   // 随机滚动
-    },
-    "chinaRegionAdaptation": {
-      "enabled": true,              // 启用中国区域适配
-      "useBaiduTrends": true,       // 使用百度热搜
-      "useWeiboTrends": true        // 使用微博热搜
     }
   }
 }
 ```
 ### 任务配置
+> dapi 流程下，实际生效的开关只有 `doDesktopSearch` / `doMobileSearch` / `doMorePromotions`（探索任务）。每日任务集、签到、阅读赚取等可领活动会**自动领取**，对应开关当前为占位（不生效）。
 ```json
 {
   "workers": {
-    "doDailySet": true,        // 每日任务集
-    "doMorePromotions": true,  // 推广任务
-    "doPunchCards": true,      // 打卡任务
-    "doDesktopSearch": true,   // 桌面端搜索
-    "doMobileSearch": true,    // 移动端搜索
-    "doDailyCheckIn": true,    // 每日签到
-    "doReadToEarn": true       // 阅读赚取
+    "doDesktopSearch": true,   // 桌面端搜索（生效）
+    "doMobileSearch": true,    // 移动端搜索（生效，L2 起）
+    "doMorePromotions": true,  // Explore on Bing / 推广任务（生效）
+    "doDailySet": true,        // 每日任务集（自动领取，开关占位）
+    "doPunchCards": true,      // 打卡任务（占位）
+    "doDailyCheckIn": true,    // 每日签到（自动领取，开关占位）
+    "doReadToEarn": true       // 阅读赚取（自动领取，开关占位）
   }
 }
 ```
@@ -177,10 +168,7 @@ services:
 {
   "passkeyHandling": {
     "enabled": true,              // 是否启用Passkey处理
-    "maxAttempts": 5,             // 最大尝试次数
-    "skipPasskeySetup": true,     // 跳过Passkey设置
-    "useDirectNavigation": true,  // 使用直接导航备选方案
-    "logPasskeyHandling": true    // 记录处理日志
+    "maxAttempts": 5              // 最大尝试次数
   }
 }
 ```
@@ -197,7 +185,7 @@ services:
 
 ```bash
 # 运行2FA验证助手
-npx tsx src/helpers/manual-2fa-helper.ts
+npx ts-node src/helpers/manual-2fa-helper.ts
 ```
 
 **使用流程：**
@@ -265,24 +253,18 @@ npx tsx src/helpers/manual-2fa-helper.ts
 ### **测试工具**
 
 ```bash
-# 配置测试
-npx tsx tests/test-dynamic-config.ts
+# 配置 / 地理 / 时区测试（用项目已装的 ts-node，对应 npm 脚本）
+npm run test-config
+npm run test-geo
+npm run test-timezone
 
-# 地理位置检测测试
-npx tsx tests/test-geo-language.ts
-
-# 时区设置测试
-npx tsx tests/test-timezone-auto.ts
-
-# 弹窗处理功能测试
-node tests/popup-handler-test.js
-
-# 弹窗无限循环修复验证
-node tests/popup-loop-fix-test.js
-
-# Passkey处理功能测试
-node tests/passkey-handling-test.js
+# 以下 JS 测试加载编译产物，运行前需先 npm run build
+npm run build
+node tests/popup-handler-test.js      # 弹窗处理
+node tests/popup-loop-fix-test.js     # 弹窗无限循环修复验证
+node tests/passkey-handling-test.js   # Passkey处理
 ```
+> 项目装的是 `ts-node`（非 `tsx`）；直接跑 `.ts` 请用 `npx ts-node <文件>` 或上面的 npm 脚本。
 
 ### **常见问题**
 
@@ -327,8 +309,8 @@ docker logs microsoftrewardspilot
 # 测试网络连接
 docker exec microsoftrewardspilot ping google.com
 
-# 检查地理位置
-docker exec microsoftrewardspilot curl -s http://ip-api.com/json
+# 检查地理位置（与代码 GeoLanguage.ts 使用的服务一致）
+docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 ```
 
 ---
@@ -341,7 +323,7 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 
 ### **支持任务**
 > 新版 rewards.bing.com 已迁移为 Next.js SPA，旧的 DOM 抓取失效；本项目改为对接 **dapi 后端 API**（活动直接领取）+ 真实搜索/视觉搜索。
-- **每日任务集 / 推广任务 / 谜题问答** - 经 dapi API 直接领取（含每日一言、拼图等）
+- **每日任务集 / 每日活动 / 推广任务** - 经 dapi API 自动领取「点击即完成」类活动（urlreward / 阅读赚取 / 签到，含每日一言等 urlreward 卡片）；需作答的互动 Quiz 不会被自动完成
 - **桌面端搜索** - 真实、拟人节奏的必应搜索，进度读自 dapi
 - **移动端搜索** - 移动设备模拟（Level 2 起，与 PC 共享当日搜索上限）
 - **Explore on Bing** - 经奖励 flyout 的类目搜索完成
@@ -355,7 +337,7 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 ### **智能特性**
 - **多账户支持** - 集群并行处理
 - **会话存储** - 免重复登录，支持2FA
-- **dapi 后端对接** - 新版 SPA 已无可抓取 DOM，改走 Rewards API
+- **dapi 后端对接** - 新版 SPA 已无可抓取 DOM，改走 Rewards 后端 API（`prod.rewardsplatform.microsoft.com/dapi`）；`rewards.bing.com` 仅为登录落地页
 - **地理位置检测** - IP 检测地区 / 坐标 / 时区
 - **时区同步** - 自动设置匹配时区
 - **本地化** - 按账户市场本地化查询，并发送对应 `X-Rewards-Language`
@@ -382,6 +364,8 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 
 ## 完整配置示例
 
+> 与仓库的 `config/config.json.example` 对应（[快速开始](#快速开始)已让你 `cp` 它）。**注意：dapi 流程下以下键为占位、不生效**：`searchDelay`、`scrollRandomResults`、`clickRandomResults`、`retryMobileSearchAmount`、`multiLanguage.fallbackLanguage`/`supportedLanguages`、整个 `chinaRegionAdaptation`、`passkeyHandling.skipPasskeySetup`/`useDirectNavigation`/`logPasskeyHandling`，以及 `workers` 中除 `doDesktopSearch`/`doMobileSearch`/`doMorePromotions` 外的开关（其余活动自动领取）。
+
 <details>
 <summary><strong>查看完整 config.json 示例</strong> （点击展开）</summary>
 
@@ -407,7 +391,7 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
     "doReadToEarn": true
   },
   "searchOnBingLocalQueries": true,
-  "globalTimeout": "120min",
+  "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
@@ -417,14 +401,14 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
     "scrollRandomResults": true,
     "clickRandomResults": true,
     "searchDelay": {
-      "min": "45s",
-      "max": "120s"
+      "min": "180s",
+      "max": "360s"
     },
     "retryMobileSearchAmount": 0,
     "multiLanguage": {
       "enabled": true,
       "autoDetectLocation": true,
-      "fallbackLanguage": "en",
+      "fallbackLanguage": "ja",
       "supportedLanguages": ["ja", "en", "zh-CN", "ko", "de", "fr", "es"]
     },
     "autoTimezone": {
@@ -432,15 +416,6 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
       "setOnStartup": true,
       "validateMatch": true,
       "logChanges": true
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.08,
-      "thinkingPauseEnabled": true,
-      "randomScrollEnabled": true,
-      "clickRandomEnabled": true,
-      "timeBasedDelayEnabled": true,
-      "adaptiveDelayEnabled": true,
-      "cautionModeEnabled": true
     },
     "chinaRegionAdaptation": {
       "enabled": false,
