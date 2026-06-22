@@ -488,16 +488,22 @@ export class MicrosoftRewardsBot {
             return
         }
 
-        // Mobile search only earns points when the dashboard actually offers a MobileSearch promotion
-        // (Level 2+). At Level 1 it doesn't, so spinning up a second browser + sign-in would earn nothing
-        // and just adds an unnecessary login (throttle / bot-score risk). When the desktop run already
-        // fetched a token, reuse it to cheaply check, and skip mobile entirely if there is nothing to earn.
+        // Cheap pre-check (reusing the desktop token): only spin up a second browser + sign-in when
+        // mobile search can still earn. Mobile searches credit the SAME single search promotion as PC
+        // (verified at Level 2 — there is no separate MobileSearch-tagged promotion; PC stalls at its
+        // sub-cap and mobile fills the rest toward the daily max). So run whenever that promotion still
+        // has room; skip when there's no search promotion (e.g. a brand-new account) or it's already
+        // maxed (e.g. PC search already filled the whole daily cap) — avoids a pointless login.
         if (this.accessToken) {
             try {
                 const data = await new RewardsApi(this, this.accessToken).getData()
-                const hasMobileSearch = data.promotions.some(p => p.type === 'search' && p.classificationTag === 'MobileSearch')
-                if (!hasMobileSearch) {
-                    log(this.isMobile, 'MAIN', 'No mobile-search points available at this account level — skipping mobile browser')
+                const searchPromo = data.promotions.find(p => p.type === 'search')
+                if (!searchPromo) {
+                    log(this.isMobile, 'MAIN', 'No search promotion available — skipping mobile browser')
+                    return
+                }
+                if (searchPromo.max > 0 && searchPromo.progress >= searchPromo.max) {
+                    log(this.isMobile, 'MAIN', 'Daily search cap already filled — skipping mobile browser')
                     return
                 }
             } catch (error) {
