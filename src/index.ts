@@ -18,6 +18,7 @@ import { RewardsEarner } from './rewards-api/RewardsEarner'
 import { RewardsApi } from './rewards-api/RewardsApi'
 import { SearchRunner } from './rewards-api/SearchRunner'
 import { ExploreRunner } from './rewards-api/ExploreRunner'
+import { VisualSearchRunner } from './rewards-api/VisualSearchRunner'
 
 import { Account } from '../interfaces/Account'
 import Axios from '../utils/Axios'
@@ -447,6 +448,13 @@ export class MicrosoftRewardsBot {
                             await explorer.run()
                         } catch (exploreError) {
                             log(this.isMobile, 'EXPLORE', `Explore-on-Bing failed: ${exploreError}`, 'warn')
+                        }
+                        // Visual-search activation offer (+10) — reverse-engineered upload + signed-in GET.
+                        try {
+                            const visual = new VisualSearchRunner(this, api, searchPage)
+                            await visual.run()
+                        } catch (visualError) {
+                            log(this.isMobile, 'VISUAL-SEARCH', `Visual search failed: ${visualError}`, 'warn')
                         }
                     }
                     const searcher = new SearchRunner(this, api, searchPage, account.email)
