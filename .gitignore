@@ -12,6 +12,12 @@ config/accounts.json
 config/accounts.dev.json
 config/config.json
 config/config.dev.json
-# local RE artifact, do not commit
+# Local reverse-engineering / traffic-capture artifacts, do not commit
+# (HAR captures contain live auth tokens & cookies — same sensitivity as sessions/)
 edge.apk
 *.apk
+*.har
+# IDE / editor
+.vscode/
+.idea/
+*.tsbuildinfo
