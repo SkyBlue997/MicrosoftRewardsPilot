@@ -11,12 +11,18 @@ export default class BrowserUtil {
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
-        this.popupHandler = PopupHandler.getInstance()
+        this.popupHandler = new PopupHandler()
         // 传递配置给弹窗处理器
         this.popupHandler.setConfig(bot.config)
     }
 
+    private syncPopupHandlerConfig(): void {
+        this.popupHandler.setConfig(this.bot.config)
+    }
+
     async tryDismissAllMessages(page: Page): Promise<void> {
+        this.syncPopupHandlerConfig()
+
         // 首先处理Microsoft Rewards弹窗
         try {
             const handledPopups = await this.popupHandler.handleAllPopups(page, 'DISMISS-MESSAGES')
@@ -64,6 +70,7 @@ export default class BrowserUtil {
      */
     async handleRewardsPopups(page: Page): Promise<boolean> {
         try {
+            this.syncPopupHandlerConfig()
             const handledPopups = await this.popupHandler.handleAllPopups(page, 'REWARDS-POPUP')
             if (handledPopups) {
                 this.bot.log(this.bot.isMobile, 'REWARDS-POPUP', 'Successfully handled Microsoft Rewards popups')
@@ -82,6 +89,7 @@ export default class BrowserUtil {
      */
     async hasPopups(page: Page): Promise<boolean> {
         try {
+            this.syncPopupHandlerConfig()
             return await this.popupHandler.hasAnyPopup(page)
         } catch (error) {
             return false
@@ -92,6 +100,7 @@ export default class BrowserUtil {
      * 清理弹窗处理记录（用于新会话）
      */
     clearPopupHistory(): void {
+        this.syncPopupHandlerConfig()
         this.popupHandler.clearHandledPopups()
     }
 

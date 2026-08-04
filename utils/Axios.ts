@@ -14,13 +14,21 @@ class AxiosClient {
 
         // If a proxy configuration is provided, set up the agent
         if (this.account.url && this.account.proxyAxios) {
-            const agent = this.getAgentForProxy(this.account)
-            this.instance.defaults.httpAgent = agent
-            this.instance.defaults.httpsAgent = agent
+            const proxyUrl = this.buildProxyUrl(this.account)
+            if (this.account.url.startsWith('socks')) {
+                const agent = new SocksProxyAgent(proxyUrl)
+                this.instance.defaults.httpAgent = agent
+                this.instance.defaults.httpsAgent = agent
+            } else {
+                // Pick the agent by TARGET scheme, not proxy scheme: an http:// proxy still needs an
+                // HttpsProxyAgent (CONNECT tunnel) to reach https:// targets, which is nearly all of them.
+                this.instance.defaults.httpAgent = new HttpProxyAgent(proxyUrl)
+                this.instance.defaults.httpsAgent = new HttpsProxyAgent(proxyUrl)
+            }
         }
     }
 
-    private getAgentForProxy(proxyConfig: AccountProxy): HttpProxyAgent<string> | HttpsProxyAgent<string> | SocksProxyAgent {
+    private buildProxyUrl(proxyConfig: AccountProxy): string {
         const { url, port, username, password } = proxyConfig
 
         // 构建代理URL，包含认证信息（如果提供的话）
@@ -38,24 +46,16 @@ class AxiosClient {
             }
         }
 
-        switch (true) {
-            case proxyConfig.url.startsWith('http://'):
-                return new HttpProxyAgent(proxyUrl)
-            case proxyConfig.url.startsWith('https://'):
-                return new HttpsProxyAgent(proxyUrl)
-            case proxyConfig.url.startsWith('socks'):
-                return new SocksProxyAgent(proxyUrl)
-            default:
-                // 默认使用 HTTP 代理
-                return new HttpProxyAgent(proxyUrl)
-        }
+        return proxyUrl
     }
 
-    // Generic method to make any Axios request
-    public async request(config: AxiosRequestConfig, bypassProxy = false): Promise<AxiosResponse> {
-        if (bypassProxy) {
-            const bypassInstance = axios.create()
-            return bypassInstance.request(config)
+    // Generic method to make any Axios request.
+    // `useProxy` controls whether the configured account proxy is used (default: true).
+    // Passing `false` sends the request directly, bypassing the proxy.
+    public async request(config: AxiosRequestConfig, useProxy = true): Promise<AxiosResponse> {
+        if (!useProxy) {
+            const directInstance = axios.create()
+            return directInstance.request(config)
         }
 
         return this.instance.request(config)

@@ -81,15 +81,19 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/accounts.json:ro
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config.json:ro
-      - ./sessions:/usr/src/microsoftrewardspilot/dist/browser/sessions
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./sessions:/usr/src/microsoftrewardspilot/sessions  # Persist login sessions
     environment:
+      - NODE_ENV=production
       - TZ=Asia/Tokyo  # Set according to geographic location
-      - CRON_SCHEDULE=0 9,16 * * *  # Run at 9AM and 4PM daily
-      - ENABLE_GEO_DETECTION=true  # Enable geo-location detection
-      - AUTO_TIMEZONE=true  # Enable automatic timezone setting
+      - CRON_SCHEDULE=0 9,16 * * *  # Prefer odd / non-round / spread-out hours instead of 9,16, to avoid hitting the same instant every day; run_daily.sh additionally layers on 3-85 min of random jitter
+      - RUN_ON_START=true  # Run once immediately on container startup
+      # Anti-detection: enable rebrowser's Runtime.enable fix (src/rebrowser-env.ts already ships defaults; declared explicitly here for easy override)
+      - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
+      - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
+> Geo-location / timezone are controlled by `searchSettings.multiLanguage.autoDetectLocation` and `searchSettings.autoTimezone` in `config.json` (not environment variables).
 
 </details>
 
@@ -113,55 +117,30 @@ services:
 ```
 
 ### Smart Search Configuration
+> Search spacing (log-normal delay) and human-like typing are built in; query language auto-localizes per account market (full query banks for ja/en/zh-CN/vi). Tunable keys:
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // Geo-location based queries
+    "useGeoLocaleQueries": true,    // Only affects the X-Rewards-Country/Language headers
     "multiLanguage": {
       "enabled": true,              // Multi-language support
-      "autoDetectLocation": true,   // Auto-detect location
-      "fallbackLanguage": "en"     // Fallback language
+      "autoDetectLocation": true    // Auto-detect location (drives query & timezone localization)
     },
     "autoTimezone": {
       "enabled": true,              // Auto timezone
       "setOnStartup": true          // Set on startup
-    },
-    "searchDelay": {
-      "min": "45s",                 // Minimum delay
-      "max": "2.5min"              // Maximum delay
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.12,      // Typing error rate
-      "thinkingPauseEnabled": true, // Thinking pause
-      "randomScrollEnabled": true   // Random scrolling
-    },
-    "antiDetection": {
-      "ultraMode": true,            // Ultimate anti-detection mode
-      "stealthLevel": "ultimate",   // Highest stealth level
-      "dynamicDelayMultiplier": 4.0,// Dynamic delay multiplier
-      "humanErrorSimulation": true, // Human error simulation
-      "deepPageInteraction": true,  // Deep page interaction
-      "sessionBreaking": true       // Smart session segmentation
-    },
-    "chinaRegionAdaptation": {
-      "enabled": true,              // Enable China region adaptation
-      "useBaiduTrends": true,       // Use Baidu trends
-      "useWeiboTrends": true        // Use Weibo trends
     }
   }
 }
 ```
 ### Task Configuration
+> Other claimable activities (daily set, check-ins, read-to-earn, puzzles) are auto-claimed and need no toggle.
 ```json
 {
   "workers": {
-    "doDailySet": true,        // Daily task set
-    "doMorePromotions": true,  // Promotional tasks
-    "doPunchCards": true,      // Punch card tasks
     "doDesktopSearch": true,   // Desktop search
-    "doMobileSearch": true,    // Mobile search
-    "doDailyCheckIn": true,    // Daily check-in
-    "doReadToEarn": true       // Read to earn
+    "doMobileSearch": true,    // Mobile search (Level 2+)
+    "doMorePromotions": true   // Explore on Bing / promotional tasks
   }
 }
 ```
@@ -185,10 +164,7 @@ services:
 {
   "passkeyHandling": {
     "enabled": true,              // Enable Passkey handling
-    "maxAttempts": 5,             // Maximum attempts
-    "skipPasskeySetup": true,     // Skip Passkey setup
-    "useDirectNavigation": true,  // Use direct navigation as fallback
-    "logPasskeyHandling": true    // Log handling
+    "maxAttempts": 5              // Maximum attempts
   }
 }
 ```
@@ -205,7 +181,7 @@ services:
 
 ```bash
 # Run 2FA verification assistant
-npx tsx src/helpers/manual-2fa-helper.ts
+npx ts-node src/helpers/manual-2fa-helper.ts
 ```
 
 **Usage Process:**
@@ -270,50 +246,16 @@ npx tsx src/helpers/manual-2fa-helper.ts
 }
 ```
 
-### **Testing Tools**
-
-```bash
-# Configuration test
-npx tsx tests/test-dynamic-config.ts
-
-# Geo-location detection test  
-npx tsx tests/test-geo-language.ts
-
-# Timezone setting test
-npx tsx tests/test-timezone-auto.ts
-
-# Popup handling test
-node tests/popup-handler-test.js
-
-# Popup infinite loop fix test
-node tests/popup-loop-fix-test.js
-
-# Passkey handling test
-node tests/passkey-handling-test.js
-
-# Quiz page debugging (use when quiz fails)
-npx tsx src/helpers/quiz-debug.ts "https://rewards.microsoft.com/quiz/xxx"
-```
-
 ### **Common Issues**
 
 <details>
 <summary><strong>Points Collection Limited/Automation Detected</strong></summary>
 
-**Symptoms:** Multiple searches without points, or incomplete point collection
-**Solution:** System automatically enables ultimate anti-detection mode
-- **AI-level behavior simulation**: Real user errors, search hesitation, accidental clicks
-- **Statistical anti-detection**: Non-standard time distribution, fatigue algorithms
-- **Deep camouflage technology**: Device sensors, Canvas fingerprint noise
-- **Session management**: Smart segmentation, automatic rest
-- **Expected results**: 95%+ point collection rate restored within 4-8 hours
-
-</details>
-
-<details>
-<summary><strong>Quiz Task Failure</strong></summary>
-
-**Solution:** Use `npx tsx src/helpers/quiz-debug.ts <URL>` to analyze page structure changes
+**Symptoms:** Several searches in a row earn no points, or point collection looks incomplete
+**Explanation:** Most of the time this is NOT detection, but rather:
+- **Reward-day reset boundary (around local midnight):** dapi returns an inconsistent snapshot (search/read counters flicker between "already reset" and "old value"). Don't run during this window — run at stable hours (e.g. the morning/evening cron of the script).
+- **Today's activities already done:** a second run on the same day is usually +0 (the correct, idempotent behavior).
+- **If you really are throttled:** reduce run frequency and avoid many quick logins in a short span; the built-in anti-detection (rebrowser patch, fingerprint consistency, log-normal delays) recovers with normal use.
 
 </details>
 
@@ -347,8 +289,8 @@ docker logs microsoftrewardspilot
 # Test network connection
 docker exec microsoftrewardspilot ping google.com
 
-# Check geo-location
-docker exec microsoftrewardspilot curl -s http://ip-api.com/json
+# Check geo-location (same service used by the code in GeoLanguage.ts)
+docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 ```
 
 ---
@@ -360,15 +302,13 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 <td width="50%" valign="top">
 
 ### **Supported Tasks**
-- **Daily Task Set** - Complete all daily tasks
-- **Promotional Tasks** - Earn bonus points
-- **Punch Card Tasks** - Continuous point accumulation
-- **Desktop Search** - Intelligent search queries
-- **Mobile Search** - Mobile device simulation
-- **Quiz Challenges** - 10pts, 30-40pts, Multiple choice, ABC questions
-- **Poll Activities** - Community voting participation
-- **Click Rewards** - Simple click-to-earn points
-- **Daily Check-in** - Automatic daily check-in
+> The new rewards.bing.com is now a Next.js SPA with no scrapable DOM; this project instead talks to the **dapi backend API** (activities claimed directly) plus real search / visual search.
+- **Daily Task Set / Daily Activities / Promotional Tasks** - "click-to-complete" activities auto-claimed via the dapi API (urlreward / read-to-earn / check-in, including daily-quote-style urlreward cards); interactive quizzes that require answering are NOT auto-completed
+- **Desktop Search** - Real, human-paced Bing searches; progress read from dapi
+- **Mobile Search** - Mobile device simulation (Level 2+, shares the daily search cap with PC)
+- **Explore on Bing** - Completed via category search from the rewards flyout
+- **Visual Search** - Auto-completes the Bing visual-search activity
+- **Daily Check-in** - Web check-in + Bing-app check-in (two independent check-ins)
 - **Read to Earn** - Earn points by reading articles
 
 </td>
@@ -377,22 +317,22 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 ### **Smart Features**
 - **Multi-Account Support** - Parallel cluster processing
 - **Session Storage** - No repeated login, 2FA support
-- **Geo-location Detection** - IP detection + localized search queries
+- **dapi Backend Integration** - The new SPA has no scrapable DOM, so the bot uses the Rewards backend API (`prod.rewardsplatform.microsoft.com/dapi`); `rewards.bing.com` is only the login/landing host
+- **Geo-location Detection** - IP-based region / coordinates / timezone detection
 - **Timezone Synchronization** - Auto-set matching timezone
-- **Multi-language Support** - Japanese, Chinese, English and other languages
-- **Behavior Simulation** - Typing errors, random scrolling, thinking pauses
-- **Ultimate Anti-Detection** - AI-level behavior simulation, device sensor injection, Canvas fingerprint noise
-- **Real User Simulation** - Error correction, search hesitation, accidental clicks and other human behaviors
-- **Statistical Anti-Detection** - Non-standard time distribution, fatigue algorithms, session segmentation
+- **Localization** - Localizes queries per account market and sends the matching `X-Rewards-Language`
+- **rebrowser Anti-Detection** - Enables the patch that removes Playwright's `Runtime.enable` CDP leak
+- **Fingerprint Consistency** - fingerprint-injector injection + UA/Client-Hints(GREASE) alignment
+- **Human-like Behavior** - Per-character typing, variable-direction scrolling, result clicks and dwell
+- **Human-like Delays** - Log-normal-distributed search spacing (no hard interval boundaries)
+- **Cadence Randomization** - Account-order shuffle, run-start jitter
 - **Popup Smart Handling** - Auto-detect and close various Microsoft Rewards popups
 - **Passkey Loop Bypass** - Auto-handle Passkey setup loop issues
-- **Intelligent Quiz Adaptation** - Multiple data acquisition strategies
 - **Docker Support** - Containerized deployment
 - **Auto Retry** - Smart retry for failed tasks
 - **Detailed Logging** - Complete execution records
-- **High Performance** - Optimized concurrent processing
 - **Flexible Configuration** - Rich customization options
-- **China Mainland Optimization** - Baidu trends, Weibo trends, localized queries
+- **Chinese Localization** - China accounts search from a built-in zh-CN query bank (one of the fully-localized languages ja/en/zh-CN/vi)
 
 </td>
 </tr>
@@ -402,8 +342,10 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 
 ## Complete Configuration Example
 
+> See the repo's `config/config.json.example` for the full template ([Quick Start](#quick-start) already had you `cp` it). Below lists only the keys that actually take effect:
+
 <details>
-<summary><strong>View complete config.json example</strong> (Click to expand)</summary>
+<summary><strong>Effective config keys</strong> (Click to expand)</summary>
 
 ```json
 {
@@ -418,74 +360,27 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
     "desktop": true
   },
   "workers": {
-    "doDailySet": true,
-    "doMorePromotions": true,
-    "doPunchCards": true,
     "doDesktopSearch": true,
     "doMobileSearch": true,
-    "doDailyCheckIn": true,
-    "doReadToEarn": true
+    "doMorePromotions": true
   },
   "searchOnBingLocalQueries": true,
-  "globalTimeout": "120min",
+  "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
   },
   "searchSettings": {
     "useGeoLocaleQueries": true,
-    "scrollRandomResults": true,
-    "clickRandomResults": true,
-    "searchDelay": {
-      "min": "45s",
-      "max": "120s"
-    },
-    "retryMobileSearchAmount": 0,
     "multiLanguage": {
       "enabled": true,
-      "autoDetectLocation": true,
-      "fallbackLanguage": "en",
-      "supportedLanguages": ["ja", "en", "zh-CN", "ko", "de", "fr", "es"]
+      "autoDetectLocation": true
     },
     "autoTimezone": {
       "enabled": true,
       "setOnStartup": true,
       "validateMatch": true,
       "logChanges": true
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.08,
-      "thinkingPauseEnabled": true,
-      "randomScrollEnabled": true,
-      "clickRandomEnabled": true,
-      "timeBasedDelayEnabled": true,
-      "adaptiveDelayEnabled": true,
-      "cautionModeEnabled": true
-    },
-    "antiDetection": {
-      "ultraMode": true,
-      "stealthLevel": "ultimate",
-      "dynamicDelayMultiplier": 4.0,
-      "progressiveBackoff": true,
-      "maxConsecutiveFailures": 1,
-      "cooldownPeriod": "20min",
-      "sessionSimulation": true,
-      "multitaskingEnabled": true,
-      "behaviorRandomization": true,
-      "timeBasedScheduling": true,
-      "humanErrorSimulation": true,
-      "deepPageInteraction": true,
-      "canvasNoise": true,
-      "sensorDataInjection": true,
-      "networkBehaviorMimic": true,
-      "sessionBreaking": true,
-      "realUserErrors": true
-    },
-    "chinaRegionAdaptation": {
-      "enabled": false,
-      "useBaiduTrends": true,
-      "useWeiboTrends": true,
-      "fallbackToLocalQueries": true
     }
   },
   "logExcludeFunc": [
@@ -512,10 +407,7 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
   },
   "passkeyHandling": {
     "enabled": true,
-    "maxAttempts": 5,
-    "skipPasskeySetup": true,
-    "useDirectNavigation": true,
-    "logPasskeyHandling": true
+    "maxAttempts": 5
   }
 }
 ```

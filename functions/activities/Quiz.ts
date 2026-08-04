@@ -2,19 +2,14 @@ import { Page } from 'rebrowser-playwright'
 
 import { Workers } from '../Workers'
 import { HumanBehaviorSimulator } from '../../src/anti-detection/human-behavior'
-import { NextGenAntiDetectionController } from '../../src/anti-detection/next-gen-controller'
 
 
 export class Quiz extends Workers {
     private humanBehavior: HumanBehaviorSimulator
-    private nextGenController: NextGenAntiDetectionController // eslint-disable-line @typescript-eslint/no-unused-vars
 
     constructor(bot: any) {
         super(bot)
         this.humanBehavior = new HumanBehaviorSimulator()
-        this.nextGenController = new NextGenAntiDetectionController()
-        // Ensure variables are recognized as used
-        void this.nextGenController
     }
 
     async doQuiz(page: Page) {
@@ -121,6 +116,11 @@ export class Quiz extends Workers {
                         }
                     }
 
+                    if (answers.length === 0) {
+                        this.bot.log(this.bot.isMobile, 'QUIZ', 'No correct option detected for this question, stopping quiz', 'warn')
+                        break
+                    }
+
                     // Click the answers
                     for (const answer of answers) {
                         try {
@@ -140,10 +140,11 @@ export class Quiz extends Workers {
 
                 } else {
                     // Other type quiz, lightspeed (2, 3, 4 options)
-                    quizData = await this.bot.browser.func.getQuizData(page) // Refresh Quiz Data
+                    quizData = await this.bot.browser.func.getQuizData(page, false) // Refresh Quiz Data (no reload mid-quiz)
                     const correctOption = quizData.correctAnswer
 
-                    for (let i = 0; i < quizData.numberOfOptions; i++) {
+                    let answered = false
+                    for (let i = 0; i < (quizData.numberOfOptions || 0); i++) {
                         try {
                             // 先等待元素存在（不管是否可见）
                             await page.waitForSelector(`#rqAnswerOption${i}`, { state: 'attached', timeout: 5000 })
@@ -172,11 +173,17 @@ export class Quiz extends Workers {
                                     this.bot.log(this.bot.isMobile, 'QUIZ', 'An error occurred, refresh was unsuccessful', 'error')
                                     return
                                 }
+                                answered = true
                                 break // 找到正确答案后退出循环
                             }
                         } catch (error) {
                             this.bot.log(this.bot.isMobile, 'QUIZ', `Failed to check answer option ${i}: ${error}`, 'warn')
                         }
+                    }
+
+                    if (!answered) {
+                        this.bot.log(this.bot.isMobile, 'QUIZ', 'Could not match the correct option for this question, stopping quiz', 'warn')
+                        break
                     }
                     await this.bot.utils.wait(2000)
                 }

@@ -6,6 +6,11 @@ import { log } from './Logger'
 import { ChromeVersion, EdgeVersion } from '../interfaces/UserAgentUtil'
 
 const NOT_A_BRAND_VERSION = '99'
+// GREASE brand string — MUST be byte-identical everywhere it appears (navigator.userAgentData AND
+// the sec-ch-ua* HTTP headers). A real browser derives both from one value; emitting two different
+// GREASE spellings for one client (this code used 'Not/A)Brand' in JS but 'Not=A?Brand' in headers)
+// is impossible on a genuine browser and a clean automation tell.
+const GREASE_BRAND = 'Not/A)Brand'
 
 export async function getUserAgent(isMobile: boolean) {
     const system = getSystemComponents(isMobile)
@@ -20,14 +25,16 @@ export async function getUserAgent(isMobile: boolean) {
     const uaMetadata = {
         isMobile,
         platform: isMobile ? 'Android' : 'Windows',
+        // Order mirrors a real Edge client (Edge, GREASE, Chromium); the sec-ch-ua* headers are
+        // derived from these same arrays in updateFingerprintUserAgent so JS and headers always agree.
         fullVersionList: [
-            { brand: 'Not/A)Brand', version: `${NOT_A_BRAND_VERSION}.0.0.0` },
             { brand: 'Microsoft Edge', version: app['edge_version'] },
+            { brand: GREASE_BRAND, version: `${NOT_A_BRAND_VERSION}.0.0.0` },
             { brand: 'Chromium', version: app['chrome_version'] }
         ],
         brands: [
-            { brand: 'Not/A)Brand', version: NOT_A_BRAND_VERSION },
             { brand: 'Microsoft Edge', version: app['edge_major_version'] },
+            { brand: GREASE_BRAND, version: NOT_A_BRAND_VERSION },
             { brand: 'Chromium', version: app['chrome_major_version'] }
         ],
         platformVersion,
@@ -39,50 +46,53 @@ export async function getUserAgent(isMobile: boolean) {
     return { userAgent: uaTemplate, userAgentMetadata: uaMetadata }
 }
 
+const FALLBACK_CHROME_VERSION = '131.0.6778.86'
+
 export async function getChromeVersion(isMobile: boolean): Promise<string> {
-    try {
-        const request = {
-            // url: 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
-            url: 'https://ghproxy.monkeyray.net/https://raw.githubusercontent.com/GoogleChromeLabs/chrome-for-testing/main/data/last-known-good-versions.json',
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
+    // Try the official endpoint first, then the regional mirror; fall back to a pinned version so a
+    // 503/timeout on these third-party services cannot block browser creation (and the whole run).
+    const urls = [
+        'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json',
+        'https://ghproxy.monkeyray.net/https://raw.githubusercontent.com/GoogleChromeLabs/chrome-for-testing/main/data/last-known-good-versions.json'
+    ]
+    for (const url of urls) {
+        try {
+            const response = await axios({ url, method: 'GET', headers: { 'Content-Type': 'application/json' }, timeout: 10000 })
+            const data: ChromeVersion = response.data
+            if (data?.channels?.Stable?.version) {
+                return data.channels.Stable.version
             }
+        } catch (error) {
+            log(isMobile, 'USERAGENT-CHROME-VERSION', `Failed to fetch Chrome version from ${url}: ${error}`, 'warn')
         }
-
-        const response = await axios(request)
-        const data: ChromeVersion = response.data
-        return data.channels.Stable.version
-
-    } catch (error) {
-        log(isMobile, 'USERAGENT-CHROME-VERSION', 'An error occurred:' + error, 'error')
-        throw new Error('An error occurred:' + error)
     }
+    log(isMobile, 'USERAGENT-CHROME-VERSION', `Falling back to pinned Chrome version ${FALLBACK_CHROME_VERSION}`, 'warn')
+    return FALLBACK_CHROME_VERSION
 }
+
+const FALLBACK_EDGE_VERSIONS = { android: '131.0.2903.87', windows: '131.0.2903.86' }
 
 export async function getEdgeVersions(isMobile: boolean) {
     try {
-        const request = {
+        const response = await axios({
             url: 'https://edgeupdates.microsoft.com/api/products',
             method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 10000
+        })
+        const data: EdgeVersion[] = response.data
+        const stable = data.find(x => x.Product == 'Stable')
+        if (stable) {
+            return {
+                android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.android,
+                windows: stable.Releases.find(x => (x.Platform == 'Windows' && x.Architecture == 'x64'))?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.windows
             }
         }
-
-        const response = await axios(request)
-        const data: EdgeVersion[] = response.data
-        const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
-        return {
-            android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion,
-            windows: stable.Releases.find(x => (x.Platform == 'Windows' && x.Architecture == 'x64'))?.ProductVersion
-        }
-
-
     } catch (error) {
-        log(isMobile, 'USERAGENT-EDGE-VERSION', 'An error occurred:' + error, 'error')
-        throw new Error('An error occurred:' + error)
+        log(isMobile, 'USERAGENT-EDGE-VERSION', `Failed to fetch Edge versions: ${error}`, 'warn')
     }
+    log(isMobile, 'USERAGENT-EDGE-VERSION', 'Falling back to pinned Edge versions', 'warn')
+    return FALLBACK_EDGE_VERSIONS
 }
 
 export function getSystemComponents(mobile: boolean): string {
@@ -166,16 +176,20 @@ export async function getAppComponents(isMobile: boolean) {
 export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprintWithHeaders, isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {
     try {
         const userAgentData = await getUserAgent(isMobile)
-        const componentData = await getAppComponents(isMobile)
 
         //@ts-expect-error Errors due it not exactly matching
         fingerprint.fingerprint.navigator.userAgentData = userAgentData.userAgentMetadata
         fingerprint.fingerprint.navigator.userAgent = userAgentData.userAgent
         fingerprint.fingerprint.navigator.appVersion = userAgentData.userAgent.replace(`${fingerprint.fingerprint.navigator.appCodeName}/`, '')
 
+        // Derive the client-hint headers from the SAME brand arrays used for navigator.userAgentData,
+        // so the GREASE brand string, versions and ordering are guaranteed identical across JS + HTTP.
+        const formatBrands = (list: Array<{ brand: string, version: string }>): string =>
+            list.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
+
         fingerprint.headers['user-agent'] = userAgentData.userAgent
-        fingerprint.headers['sec-ch-ua'] = `"Microsoft Edge";v="${componentData.edge_major_version}", "Not=A?Brand";v="${componentData.not_a_brand_major_version}", "Chromium";v="${componentData.chrome_major_version}"`
-        fingerprint.headers['sec-ch-ua-full-version-list'] = `"Microsoft Edge";v="${componentData.edge_version}", "Not=A?Brand";v="${componentData.not_a_brand_version}", "Chromium";v="${componentData.chrome_version}"`
+        fingerprint.headers['sec-ch-ua'] = formatBrands(userAgentData.userAgentMetadata.brands)
+        fingerprint.headers['sec-ch-ua-full-version-list'] = formatBrands(userAgentData.userAgentMetadata.fullVersionList)
 
         /*
         Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36 EdgA/129.0.0.0

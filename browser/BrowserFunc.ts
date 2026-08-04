@@ -10,6 +10,7 @@ import { Counters, DashboardData, MorePromotion, PromotionalItem } from './../in
 import { QuizData } from './../interfaces/QuizData'
 import { AppUserData } from '../interfaces/AppUserData'
 import { EarnablePoints } from '../interfaces/Points'
+import { GeoLanguageDetector } from '../utils/GeoLanguage'
 
 
 export default class BrowserFunc {
@@ -298,7 +299,7 @@ export default class BrowserFunc {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'X-Rewards-Country': geoLocale,
-                    'X-Rewards-Language': 'en'
+                    'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry(geoLocale.toUpperCase())
                 }
             }
 
@@ -349,7 +350,7 @@ export default class BrowserFunc {
      * @param {Page} page Playwright page
      * @returns {QuizData} Quiz data object
     */
-    async getQuizData(page: Page): Promise<QuizData> {
+    async getQuizData(page: Page, allowReload: boolean = true): Promise<QuizData> {
         try {
             // 首先检查页面是否已关闭
             if (page.isClosed()) {
@@ -371,7 +372,7 @@ export default class BrowserFunc {
             }
 
             // 方法3: 监听网络请求获取数据
-            const apiData = await this.getQuizDataFromAPI(page)
+            const apiData = await this.getQuizDataFromAPI(page, allowReload)
             if (apiData) {
                 this.bot.log(this.bot.isMobile, 'GET-QUIZ-DATA', 'Quiz data obtained via API interception')
                 return apiData
@@ -505,9 +506,14 @@ export default class BrowserFunc {
     /**
      * 通过API请求拦截获取Quiz数据
      */
-    private async getQuizDataFromAPI(page: Page): Promise<QuizData | null> {
+    private async getQuizDataFromAPI(page: Page, allowReload: boolean = true): Promise<QuizData | null> {
         return new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(null), 8000)
+            const timeout = setTimeout(() => {
+                if (responseHandler) {
+                    page.off('response', responseHandler)
+                }
+                resolve(null)
+            }, 8000)
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             let responseHandler: ((response: any) => void) | null = null
 
@@ -551,10 +557,12 @@ export default class BrowserFunc {
 
             page.on('response', responseHandler)
 
-            // 触发可能的数据加载
-            page.reload().catch(() => {
-                // 如果页面已经在加载中，忽略错误
-            })
+            // 触发可能的数据加载（仅在允许时；答题中途刷新会重置进行中的 quiz，因此 refresh 调用禁止 reload）
+            if (allowReload) {
+                page.reload().catch(() => {
+                    // 如果页面已经在加载中，忽略错误
+                })
+            }
         })
     }
 
@@ -651,10 +659,12 @@ export default class BrowserFunc {
         return selector
     }
 
-    async closeBrowser(managedBrowser: ManagedBrowser) {
+    async closeBrowser(managedBrowser: ManagedBrowser, saveSession = true) {
         try {
-            // Save cookies
-            await saveSessionData(this.bot.config.sessionPath, managedBrowser.context, managedBrowser.email, managedBrowser.isMobile)
+            if (saveSession) {
+                // Save cookies
+                await saveSessionData(this.bot.config.sessionPath, managedBrowser.context, managedBrowser.email, managedBrowser.isMobile)
+            }
 
             await this.bot.utils.wait(2000)
 

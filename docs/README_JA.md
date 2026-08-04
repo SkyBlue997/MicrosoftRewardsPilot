@@ -81,15 +81,19 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/accounts.json:ro
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config.json:ro
-      - ./sessions:/usr/src/microsoftrewardspilot/dist/browser/sessions
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./sessions:/usr/src/microsoftrewardspilot/sessions  # ログインセッションを保存
     environment:
+      - NODE_ENV=production
       - TZ=Asia/Tokyo  # 地理的位置に応じて設定
-      - CRON_SCHEDULE=0 9,16 * * *  # 毎日9時と16時に実行
-      - ENABLE_GEO_DETECTION=true  # 地理位置検出を有効化
-      - AUTO_TIMEZONE=true  # 自動タイムゾーン設定を有効化
+      - CRON_SCHEDULE=0 9,16 * * *  # 「ちょうどの時刻」を避け、奇数・非整数・分散した時間に変更することを推奨（毎日同じ時刻に集中させない）。run_daily.sh がさらに 3〜85 分のランダムなジッターを上乗せします
+      - RUN_ON_START=true  # コンテナ起動時に即座に1回実行
+      # 反検出：rebrowser の Runtime.enable 修正を有効化（src/rebrowser-env.ts にデフォルト値が組み込み済み。ここで明示すると上書きできて便利）
+      - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
+      - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
+> 地理的位置／タイムゾーンは `config.json` の `searchSettings.multiLanguage.autoDetectLocation` と `searchSettings.autoTimezone` で制御します（環境変数ではありません）。
 
 </details>
 
@@ -113,55 +117,30 @@ services:
 ```
 
 ### スマート検索設定
+> 検索間隔（対数正規分布の遅延）と人間らしいタイピングは内蔵されています。クエリ言語はアカウントの市場に応じて自動的にローカライズされます（ja/en/zh-CN/vi には完全なクエリ集が用意されています）。調整可能なキー：
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // 地理位置ベースのクエリ
+    "useGeoLocaleQueries": true,    // リクエストヘッダー X-Rewards-Country/Language にのみ影響
     "multiLanguage": {
       "enabled": true,              // 多言語サポート
-      "autoDetectLocation": true,   // 位置自動検出
-      "fallbackLanguage": "en"     // フォールバック言語
+      "autoDetectLocation": true    // 位置自動検出（クエリとタイムゾーンのローカライズを決定）
     },
     "autoTimezone": {
       "enabled": true,              // 自動タイムゾーン
       "setOnStartup": true          // 起動時に設定
-    },
-    "searchDelay": {
-      "min": "45s",                 // 最小遅延
-      "max": "2.5min"              // 最大遅延
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.12,      // タイピングエラー率
-      "thinkingPauseEnabled": true, // 思考停止
-      "randomScrollEnabled": true   // ランダムスクロール
-    },
-    "antiDetection": {
-      "ultraMode": true,            // 究極の検出回避モード
-      "stealthLevel": "ultimate",   // 最高ステルスレベル
-      "dynamicDelayMultiplier": 4.0,// 動的遅延倍率
-      "humanErrorSimulation": true, // 人間のエラーシミュレーション
-      "deepPageInteraction": true,  // 深層ページインタラクション
-      "sessionBreaking": true       // スマートセッション分割
-    },
-    "chinaRegionAdaptation": {
-      "enabled": true,              // 中国地域適応を有効化
-      "useBaiduTrends": true,       // 百度トレンドを使用
-      "useWeiboTrends": true        // 微博トレンドを使用
     }
   }
 }
 ```
 ### タスク設定
+> その他の獲得可能なアクティビティ（デイリータスクセット、チェックイン、読んで稼ぐ、パズルなど）は自動的に獲得され、トグルは不要です。
 ```json
 {
   "workers": {
-    "doDailySet": true,        // デイリータスクセット
-    "doMorePromotions": true,  // プロモーションタスク
-    "doPunchCards": true,      // パンチカードタスク
     "doDesktopSearch": true,   // デスクトップ検索
-    "doMobileSearch": true,    // モバイル検索
-    "doDailyCheckIn": true,    // 毎日チェックイン
-    "doReadToEarn": true       // 読んで稼ぐ
+    "doMobileSearch": true,    // モバイル検索（L2 以降）
+    "doMorePromotions": true   // Explore on Bing / プロモーションタスク
   }
 }
 ```
@@ -185,10 +164,7 @@ services:
 {
   "passkeyHandling": {
     "enabled": true,              // Passkey処理を有効化
-    "maxAttempts": 5,             // 最大試行回数
-    "skipPasskeySetup": true,     // Passkey設定をスキップ
-    "useDirectNavigation": true,  // 直接ナビゲーションを使用
-    "logPasskeyHandling": true    // 処理ログを記録
+    "maxAttempts": 5              // 最大試行回数
   }
 }
 ```
@@ -205,7 +181,7 @@ services:
 
 ```bash
 # 2FA認証アシスタントを実行
-npx tsx src/helpers/manual-2fa-helper.ts
+npx ts-node src/helpers/manual-2fa-helper.ts
 ```
 
 **使用手順：**
@@ -270,50 +246,16 @@ npx tsx src/helpers/manual-2fa-helper.ts
 }
 ```
 
-### **テストツール**
-
-```bash
-# 設定テスト
-npx tsx tests/test-dynamic-config.ts
-
-# 地理位置検出テスト  
-npx tsx tests/test-geo-language.ts
-
-# タイムゾーン設定テスト
-npx tsx tests/test-timezone-auto.ts
-
-# ポップアップ処理テスト
-node tests/popup-handler-test.js
-
-# ポップアップ無限ループ修正テスト
-node tests/popup-loop-fix-test.js
-
-# Passkey処理テスト
-node tests/passkey-handling-test.js
-
-# クイズページデバッグ（クイズが失敗した時に使用）
-npx tsx src/helpers/quiz-debug.ts "https://rewards.microsoft.com/quiz/xxx"
-```
-
 ### **よくある問題**
 
 <details>
 <summary><strong>ポイント取得制限・自動化検出</strong></summary>
 
 **現象：** 連続検索でポイントなし、またはポイント取得不完全
-**解決方法：** システムが自動的に究極の検出回避モードを有効化
-- **AI レベル行動シミュレーション**：真実のユーザーエラー、検索迷い、意図しないクリック
-- **統計学的検出回避**：非標準時間分布、疲労アルゴリズム
-- **深層カモフラージュ技術**：デバイスセンサー、Canvas フィンガープリントノイズ
-- **セッション管理**：スマート分割、自動休憩
-- **期待効果**：4-8時間以内に95%+のポイント取得率を回復
-
-</details>
-
-<details>
-<summary><strong>クイズタスクの失敗</strong></summary>
-
-**解決方法：** `npx tsx src/helpers/quiz-debug.ts <URL>` を使用してページ構造の変化を分析
+**説明：** 多くの場合、検出されているわけではなく、以下が原因です：
+- **報酬日のリセット境界（おおよそ現地時間の深夜前後）**：dapi が一貫しないスナップショットを返します（検索／読書が「リセット済み」と「旧値」の間で揺れる）。この時間帯には実行せず、安定した時間帯（スクリプト cron の朝／夜など）に実行してください
+- **当日のアクティビティは完了済み**：当日2回目の実行は多くが +0 です（正しい冪等な挙動）
+- 本当に制限されている場合：実行頻度を下げ、短時間に何度もログインするのを避けてください。本プロジェクトの反検出（rebrowser パッチ、指紋の一貫性、対数正規分布の遅延）は通常の利用とともに回復します
 
 </details>
 
@@ -347,8 +289,8 @@ docker logs microsoftrewardspilot
 # ネットワーク接続をテスト
 docker exec microsoftrewardspilot ping google.com
 
-# 地理位置を確認
-docker exec microsoftrewardspilot curl -s http://ip-api.com/json
+# 地理位置を確認（コード GeoLanguage.ts が使用するサービスと同じ）
+docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 ```
 
 ---
@@ -360,15 +302,13 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 <td width="50%" valign="top">
 
 ### **サポートされているタスク**
-- **デイリータスクセット** - すべての日常タスクを完了
-- **プロモーションタスク** - ボーナスポイントを獲得
-- **パンチカードタスク** - 継続的なポイント蓄積
-- **デスクトップ検索** - インテリジェント検索クエリ
-- **モバイル検索** - モバイルデバイスシミュレーション
-- **クイズチャレンジ** - 10pt、30-40pt、選択問題、ABC問題
-- **投票活動** - コミュニティ投票参加
-- **クリック報酬** - 簡単クリックでポイント獲得
-- **毎日チェックイン** - 自動毎日チェックイン
+> 新しい rewards.bing.com は Next.js SPA に移行し、旧来の DOM スクレイピングは使えなくなりました。本プロジェクトは **dapi バックエンド API** に接続（アクティビティを直接獲得）＋ 実際の検索／視覚検索に切り替えています。
+- **デイリータスクセット / 毎日のアクティビティ / プロモーションタスク** - dapi API 経由で「クリックで完了」型アクティビティを自動獲得（urlreward / 読んで稼ぐ / チェックイン、毎日の一言などの urlreward カード含む）。回答が必要なインタラクティブ Quiz は自動完了されません
+- **デスクトップ検索** - 実際の、人間らしいペースの Bing 検索。進捗は dapi から読み取り
+- **モバイル検索** - モバイルデバイスシミュレーション（Level 2 以降、PC と当日の検索上限を共有）
+- **Explore on Bing** - 報酬 flyout からのカテゴリ検索で完了
+- **視覚検索** - Bing 視覚検索アクティビティを自動完了
+- **毎日チェックイン** - ウェブチェックイン ＋ Bing アプリチェックイン（2種類の独立したチェックイン）
 - **読んで稼ぐ** - 記事を読んでポイント獲得
 
 </td>
@@ -377,22 +317,22 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 ### **スマート機能**
 - **マルチアカウントサポート** - 並列クラスター処理
 - **セッション保存** - 重複ログインなし、2FA対応
-- **地理位置検出** - IP検出＋ローカライズされた検索クエリ
+- **dapi バックエンド接続** - 新しい SPA にはスクレイピング可能な DOM がないため、Rewards バックエンド API（`prod.rewardsplatform.microsoft.com/dapi`）を利用。`rewards.bing.com` はログインのランディングページのみ
+- **地理位置検出** - IP で地域 / 座標 / タイムゾーンを検出
 - **タイムゾーン同期** - マッチングタイムゾーンの自動設定
-- **多言語サポート** - 日本語、中国語、英語など
-- **行動シミュレーション** - タイピングエラー、ランダムスクロール、思考停止
-- **究極の検出回避** - AIレベル行動シミュレーション、デバイスセンサー注入、Canvasフィンガープリントノイズ
-- **真のユーザーシミュレーション** - エラー修正、検索迷い、意図しないクリックなど人間の行動
-- **統計学的検出回避** - 非標準時間分布、疲労アルゴリズム、セッション分割
+- **ローカライズ** - アカウントの市場に応じてクエリをローカライズし、対応する `X-Rewards-Language` を送信
+- **rebrowser 反検出** - パッチを有効化し、Playwright の `Runtime.enable` CDP リークを除去
+- **指紋の一貫性** - fingerprint-injector による注入 ＋ UA/Client-Hints(GREASE) の整合
+- **人間らしい行動** - 一文字ずつのタイピング、可変方向のスクロール、結果クリックと滞留
+- **人間らしい遅延** - 対数正規分布の検索間隔（区間の硬い境界なし）
+- **ペースのランダム化** - アカウント順序のシャッフル、実行開始時刻のジッター
 - **ポップアップスマート処理** - Microsoft Rewardsの各種ポップアップを自動検出・閉じる
 - **Passkeyループ回避** - Passkey設定ループ問題を自動処理
-- **クイズインテリジェント適応** - 複数のデータ取得戦略
 - **Dockerサポート** - コンテナ化デプロイ
 - **自動リトライ** - 失敗タスクのスマートリトライ
 - **詳細ログ** - 完全な実行記録
-- **高性能** - 最適化された並行処理
 - **柔軟な設定** - 豊富なカスタマイズオプション
-- **中国本土最適化** - 百度トレンド、微博トレンド、ローカライズクエリ
+- **中国語ローカライズ** - 中国アカウントは組み込みの zh-CN クエリ集から検索（完全ローカライズ言語 ja/en/zh-CN/vi の1つ）
 
 </td>
 </tr>
@@ -402,8 +342,10 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
 
 ## 完全設定例
 
+> 完全なテンプレートはリポジトリの `config/config.json.example` を参照してください（[クイックスタート](#クイックスタート)で `cp` 済みです）。以下は実際に有効なキーのみを列挙しています：
+
 <details>
-<summary><strong>完全な config.json 例を表示</strong> （クリックして展開）</summary>
+<summary><strong>有効な設定項目</strong> （クリックして展開）</summary>
 
 ```json
 {
@@ -418,74 +360,27 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
     "desktop": true
   },
   "workers": {
-    "doDailySet": true,
-    "doMorePromotions": true,
-    "doPunchCards": true,
     "doDesktopSearch": true,
     "doMobileSearch": true,
-    "doDailyCheckIn": true,
-    "doReadToEarn": true
+    "doMorePromotions": true
   },
   "searchOnBingLocalQueries": true,
-  "globalTimeout": "120min",
+  "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
   },
   "searchSettings": {
     "useGeoLocaleQueries": true,
-    "scrollRandomResults": true,
-    "clickRandomResults": true,
-    "searchDelay": {
-      "min": "45s",
-      "max": "120s"
-    },
-    "retryMobileSearchAmount": 0,
     "multiLanguage": {
       "enabled": true,
-      "autoDetectLocation": true,
-      "fallbackLanguage": "en",
-      "supportedLanguages": ["ja", "en", "zh-CN", "ko", "de", "fr", "es"]
+      "autoDetectLocation": true
     },
     "autoTimezone": {
       "enabled": true,
       "setOnStartup": true,
       "validateMatch": true,
       "logChanges": true
-    },
-    "humanBehavior": {
-      "typingErrorRate": 0.08,
-      "thinkingPauseEnabled": true,
-      "randomScrollEnabled": true,
-      "clickRandomEnabled": true,
-      "timeBasedDelayEnabled": true,
-      "adaptiveDelayEnabled": true,
-      "cautionModeEnabled": true
-    },
-    "antiDetection": {
-      "ultraMode": true,
-      "stealthLevel": "ultimate",
-      "dynamicDelayMultiplier": 4.0,
-      "progressiveBackoff": true,
-      "maxConsecutiveFailures": 1,
-      "cooldownPeriod": "20min",
-      "sessionSimulation": true,
-      "multitaskingEnabled": true,
-      "behaviorRandomization": true,
-      "timeBasedScheduling": true,
-      "humanErrorSimulation": true,
-      "deepPageInteraction": true,
-      "canvasNoise": true,
-      "sensorDataInjection": true,
-      "networkBehaviorMimic": true,
-      "sessionBreaking": true,
-      "realUserErrors": true
-    },
-    "chinaRegionAdaptation": {
-      "enabled": false,
-      "useBaiduTrends": true,
-      "useWeiboTrends": true,
-      "fallbackToLocalQueries": true
     }
   },
   "logExcludeFunc": [
@@ -512,10 +407,7 @@ docker exec microsoftrewardspilot curl -s http://ip-api.com/json
   },
   "passkeyHandling": {
     "enabled": true,
-    "maxAttempts": 5,
-    "skipPasskeySetup": true,
-    "useDirectNavigation": true,
-    "logPasskeyHandling": true
+    "maxAttempts": 5
   }
 }
 ```
