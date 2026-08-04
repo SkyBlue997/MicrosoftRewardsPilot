@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-0 \
     tzdata \
     wget \
-    # Additional packages for anti-detection
+    # Additional fonts/libraries for Chromium rendering
     fonts-liberation \
     fonts-dejavu-core \
     fonts-freefont-ttf \
@@ -54,12 +54,6 @@ RUN touch /var/log/cron.log
 CMD ["sh", "-c", "echo \"$TZ\" > /etc/timezone && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
-    # Set anti-detection environment variables with defaults\
-    export ENABLE_ULTRA_ANTI_DETECTION=${ENABLE_ULTRA_ANTI_DETECTION:-true} && \
-    export STEALTH_LEVEL=${STEALTH_LEVEL:-ultimate} && \
-    export DYNAMIC_DELAY_MULTIPLIER=${DYNAMIC_DELAY_MULTIPLIER:-4.0} && \
-    export MAX_CONSECUTIVE_FAILURES=${MAX_CONSECUTIVE_FAILURES:-1} && \
-    export COOLDOWN_PERIOD=${COOLDOWN_PERIOD:-20min} && \
     envsubst < /etc/cron.d/microsoftrewardspilot-cron.template > /etc/cron.d/microsoftrewardspilot-cron && \
     chmod 0644 /etc/cron.d/microsoftrewardspilot-cron && \
     crontab /etc/cron.d/microsoftrewardspilot-cron && \

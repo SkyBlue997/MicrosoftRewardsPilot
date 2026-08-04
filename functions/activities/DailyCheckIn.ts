@@ -4,6 +4,7 @@ import { AxiosRequestConfig } from 'axios'
 import { Workers } from '../Workers'
 
 import { DashboardData } from '../../interfaces/DashboardData'
+import { GeoLanguageDetector } from '../../utils/GeoLanguage'
 
 
 export class DailyCheckIn extends Workers {
@@ -31,13 +32,13 @@ export class DailyCheckIn extends Workers {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
                     'X-Rewards-Country': geoLocale,
-                    'X-Rewards-Language': 'en'
+                    'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry(geoLocale.toUpperCase())
                 },
                 data: JSON.stringify(jsonData)
             }
 
             const claimResponse = await this.bot.axios.request(claimRequest)
-            const claimedPoint = parseInt((await claimResponse.data).response?.activity?.p) ?? 0
+            const claimedPoint = parseInt((await claimResponse.data).response?.activity?.p) || 0
 
             this.bot.log(this.bot.isMobile, 'DAILY-CHECK-IN', claimedPoint > 0 ? `Claimed ${claimedPoint} points` : 'Already claimed today')
         } catch (error) {

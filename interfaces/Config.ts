@@ -20,6 +20,8 @@ export interface Config {
     webhook: ConfigWebhook;
     popupHandling?: ConfigPopupHandling;
     passkeyHandling?: ConfigPasskeyHandling;
+    readToEarn?: ConfigReadToEarn;
+    scheduler?: ConfigScheduler;
 }
 
 export interface ConfigSaveFingerprint {
@@ -35,8 +37,6 @@ export interface ConfigSearchSettings {
     retryMobileSearchAmount: number;
     multiLanguage?: ConfigMultiLanguage;
     autoTimezone?: ConfigAutoTimezone;
-    humanBehavior?: ConfigHumanBehavior;
-    antiDetection?: ConfigAntiDetection;
     chinaRegionAdaptation?: ConfigChinaRegion;
 }
 
@@ -52,16 +52,6 @@ export interface ConfigAutoTimezone {
     setOnStartup: boolean;
     validateMatch: boolean;
     logChanges: boolean;
-}
-
-export interface ConfigHumanBehavior {
-    typingErrorRate: number;
-    thinkingPauseEnabled: boolean;
-    randomScrollEnabled: boolean;
-    clickRandomEnabled: boolean;
-    timeBasedDelayEnabled: boolean;
-    adaptiveDelayEnabled?: boolean;
-    cautionModeEnabled?: boolean;
 }
 
 export interface ConfigSearchDelay {
@@ -91,16 +81,24 @@ export interface ConfigWorkers {
 
 export interface ConfigChinaRegion {
     enabled: boolean;
+    useUapisTrends: boolean;
     useBaiduTrends: boolean;
     useWeiboTrends: boolean;
     fallbackToLocalQueries: boolean;
 }
 
-export interface ConfigAntiDetection {
-    dynamicDelayMultiplier: number;
-    progressiveBackoff: boolean;
-    maxConsecutiveFailures: number;
-    cooldownPeriod: string;
+export interface ConfigReadToEarn {
+    delayMin: string;
+    delayMax: string;
+}
+
+export interface ConfigScheduler {
+    enabled: boolean;
+    times: string[];
+    timezone?: string;
+    runOnStart?: boolean;
+    maxShortRunsPerDay?: number;
+    shortRunThreshold?: string;
 }
 
 export interface ConfigPopupHandling {

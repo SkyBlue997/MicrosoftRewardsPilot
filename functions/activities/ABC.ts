@@ -2,19 +2,14 @@ import { Page } from 'rebrowser-playwright'
 
 import { Workers } from '../Workers'
 import { HumanBehaviorSimulator } from '../../src/anti-detection/human-behavior'
-import { NextGenAntiDetectionController } from '../../src/anti-detection/next-gen-controller'
 
 
 export class ABC extends Workers {
     private humanBehavior: HumanBehaviorSimulator
-    private nextGenController: NextGenAntiDetectionController // eslint-disable-line @typescript-eslint/no-unused-vars
 
     constructor(bot: any) {
         super(bot)
         this.humanBehavior = new HumanBehaviorSimulator()
-        this.nextGenController = new NextGenAntiDetectionController()
-        // Ensure variables are recognized as used
-        void this.nextGenController
     }
 
     async doABC(page: Page) {
@@ -30,7 +25,10 @@ export class ABC extends Workers {
                 await page.waitForSelector('.wk_OptionClickClass', { state: 'visible', timeout: 10000 })
 
                 const answers = $('.wk_OptionClickClass')
-                const answer = answers[this.bot.utils.randomNumber(0, 2)]?.attribs['id']
+                const answer = answers[this.bot.utils.randomNumber(0, answers.length - 1)]?.attribs['id']
+                if (!answer) {
+                    throw new Error('No answer option found for ABC question')
+                }
 
                 await page.waitForSelector(`#${answer}`, { state: 'visible', timeout: 10000 })
 

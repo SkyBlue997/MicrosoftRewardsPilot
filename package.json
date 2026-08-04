@@ -12,10 +12,6 @@
     "start": "node ./dist/src/index.js",
     "ts-start": "ts-node ./src/index.ts",
     "dev": "ts-node ./src/index.ts -dev",
-    "test-config": "ts-node ./tests/test-dynamic-config.ts",
-    "test-geo": "ts-node ./tests/test-geo-language.ts",
-    "test-timezone": "ts-node ./tests/test-timezone-auto.ts",
-    "debug-quiz": "ts-node ./src/helpers/quiz-debug.ts",
     "kill-chrome-win": "powershell -Command \"Get-Process | Where-Object { $_.MainModule.FileVersionInfo.FileDescription -eq 'Google Chrome for Testing' } | ForEach-Object { Stop-Process -Id $_.Id -Force }\"",
     "create-docker": "docker build -t microsoftrewardspilot-docker ."
   },
@@ -36,6 +32,7 @@
     "@typescript-eslint/eslint-plugin": "^7.17.0",
     "eslint": "^8.57.0",
     "eslint-plugin-modules-newline": "^0.0.6",
+    "playwright": "^1.52.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.5.4"
   },
@@ -48,8 +45,7 @@
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.6",
     "ms": "^2.1.3",
-    "playwright": "1.47.2",
-    "rebrowser-playwright": "1.47.2",
+    "rebrowser-playwright": "^1.52.0",
     "socks-proxy-agent": "^8.0.5",
     "ts-node": "^10.9.2"
   }

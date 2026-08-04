@@ -6,15 +6,9 @@ import { AxiosRequestConfig } from 'axios'
 import { MicrosoftRewardsBot } from '../src/index'
 import { saveSessionData } from '../utils/Load'
 import { HumanBehaviorSimulator } from '../src/anti-detection/human-behavior'
-import { NextGenAntiDetectionController } from '../src/anti-detection/next-gen-controller'
 
 import { OAuth } from '../interfaces/OAuth'
-
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-})
+import { AccountLockedError, LoginTimeoutError } from '../interfaces/Errors'
 
 export class Login {
     private bot: MicrosoftRewardsBot
@@ -28,14 +22,24 @@ export class Login {
     private lastNoPromptLog: number = 0
     private noPromptIterations: number = 0
     private humanBehavior: HumanBehaviorSimulator
-    private nextGenController: NextGenAntiDetectionController // eslint-disable-line @typescript-eslint/no-unused-vars
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
         this.humanBehavior = new HumanBehaviorSimulator()
-        this.nextGenController = new NextGenAntiDetectionController()
-        // Ensure variable is recognized as used
-        void this.nextGenController
+    }
+
+    private async promptForInput(question: string): Promise<string> {
+        return await new Promise<string>((resolve) => {
+            const prompt = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            })
+
+            prompt.question(question, (input) => {
+                prompt.close()
+                resolve(input)
+            })
+        })
     }
 
     async login(page: Page, email: string, password: string) {
@@ -60,11 +64,23 @@ export class Login {
             // Check if account is locked
             await this.checkAccountLocked(page)
 
-            const isLoggedIn = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 }).then(() => true).catch(() => false)
+            // New Rewards UI: logged in when we land on the authenticated SPA (rewards.bing.com,
+            // not the anonymous /welcome or a sign-in page). The old RewardsPortal marker is gone.
+            await this.bot.utils.wait(1500)
+            const cu = new URL(page.url())
+            const isLoggedIn = (cu.hostname === 'rewards.bing.com' || cu.hostname.endsWith('.rewards.bing.com'))
+                && !cu.pathname.includes('/welcome') && !cu.pathname.includes('/signin')
+                && !cu.pathname.includes('/about')
+
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `After initial navigation: ${page.url()} | pathname=${cu.pathname} | isLoggedIn=${isLoggedIn}`)
 
             if (!isLoggedIn) {
+                // The anonymous welcome page has no email field — it requires clicking "Sign in"
+                // to reach the Microsoft login page first.
+                if (page.url().includes('/welcome') || page.url().includes('/about')) {
+                    await this.startSignInFromWelcome(page)
+                }
                 await this.execLogin(page, email, password)
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Logged into Microsoft successfully')
             } else {
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Already logged in')
 
@@ -84,7 +100,29 @@ export class Login {
         } catch (error) {
             // Throw and don't continue
             this.bot.log(this.bot.isMobile, 'LOGIN', 'An error occurred:' + error, 'error')
-            throw new Error('An error occurred:' + error)
+            throw error
+        }
+    }
+
+    private async startSignInFromWelcome(page: Page): Promise<void> {
+        try {
+            this.bot.log(this.bot.isMobile, 'LOGIN', 'On Rewards welcome page — clicking "Sign in" to reach the Microsoft login page')
+            const signInLink = await page.waitForSelector(
+                '#rewards-header-sign-in, #card-footer-sign-in-link, a[href*="/auth/login"], a[href*="/signin"], [aria-label*="login" i], [aria-label*="登录"]',
+                { state: 'visible', timeout: 5000 }
+            ).catch(() => null)
+            if (signInLink) {
+                await signInLink.click()
+            } else {
+                this.bot.log(this.bot.isMobile, 'LOGIN', 'Sign-in link not found on welcome page; navigating to signin directly', 'warn')
+                await page.goto('https://rewards.bing.com/signin', { waitUntil: 'domcontentloaded' }).catch(() => { })
+            }
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `After starting sign-in: ${page.url()}`)
+            // Wait for the Microsoft login page (email field, or password/userDisplayName if prefilled)
+            await page.waitForSelector('input[type="email"], input[type="password"], #userDisplayName', { state: 'visible', timeout: 15000 }).catch(() => null)
+            await this.bot.utils.wait(1000)
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Failed to start sign-in from welcome page: ${error}`, 'warn')
         }
     }
 
@@ -96,6 +134,9 @@ export class Login {
             await this.bot.utils.wait(2000)
             await this.enterPassword(page, password)
             await this.bot.utils.wait(2000)
+
+            // 🎯 处理密码提交后出现的 2FA 挑战（Authenticator 数字匹配 / SMS / 邮箱）
+            await this.handlePostPasswordTwoFactor(page)
 
             // 🎯 检查并处理Passkey设置循环（密码输入后可能出现）
             try {
@@ -114,6 +155,7 @@ export class Login {
             await this.checkLoggedIn(page)
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', 'An error occurred: ' + error, 'error')
+            throw error
         }
     }
 
@@ -124,8 +166,14 @@ export class Login {
             // Wait for email field
             const emailField = await page.waitForSelector(emailInputSelector, { state: 'visible', timeout: 2000 }).catch(() => null)
             if (!emailField) {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Email field not found', 'warn')
-                return
+                const emailPrefilled = await page.waitForSelector('#userDisplayName', { timeout: 1000 }).catch(() => null)
+                const passwordField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 1000 }).catch(() => null)
+                if (emailPrefilled || passwordField) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN', 'Email step already completed by Microsoft')
+                    return
+                }
+
+                throw new Error('Email field not found')
             }
 
             await this.bot.utils.wait(1000)
@@ -156,11 +204,18 @@ export class Login {
                 await this.bot.utils.wait(2000)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Email entered successfully')
             } else {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Next button not found after email entry', 'warn')
+                const passwordField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 2000 }).catch(() => null)
+                if (passwordField) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN', 'Email step advanced without explicit next button')
+                    return
+                }
+
+                throw new Error('Next button not found after email entry')
             }
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Email entry failed: ${error}`, 'error')
+            throw error
         }
     }
 
@@ -174,13 +229,22 @@ export class Login {
                 const otherWaysButton = await viewFooter.$('span[role="button"]')
                 if (otherWaysButton) {
                     await otherWaysButton.click()
-                    await this.bot.utils.wait(5000)
+                    await this.bot.utils.wait(3000)
 
-                    const secondListItem = page.locator('[role="listitem"]').nth(1)
-                    if (await secondListItem.isVisible()) {
-                        await secondListItem.click()
+                    // After "other ways to sign in", the password field is often shown directly. If not,
+                    // pick the explicit "Use your password" option. (The previous blind nth(1) list click
+                    // could land on the create-account option and navigate to signup.live.com.)
+                    const passwordVisible = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 3000 }).catch(() => null)
+                    if (!passwordVisible) {
+                        const usePasswordTexts = ['Use your password', 'パスワードを使用する', '使用密码', '비밀번호 사용', 'Passwort verwenden', 'Utiliser votre mot de passe', 'Usar tu contraseña']
+                        for (const t of usePasswordTexts) {
+                            const opt = page.locator(`[role="listitem"]:has-text("${t}"), [role="button"]:has-text("${t}")`).first()
+                            if (await opt.isVisible().catch(() => false)) {
+                                await opt.click().catch(() => { })
+                                break
+                            }
+                        }
                     }
-
                 }
             }
 
@@ -214,12 +278,49 @@ export class Login {
                 await this.bot.utils.wait(2000)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Password entered successfully')
             } else {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Next button not found after password entry', 'warn')
+                const loginProgressed = await Promise.race([
+                    page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('input[name="otc"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('input[name="proofconfirmation"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false),
+                    page.waitForSelector('#displaySign, [data-testid="displaySign"]', { state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)
+                ])
+
+                if (!loginProgressed) {
+                    throw new Error('Next button not found after password entry')
+                }
             }
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Password entry failed: ${error}`, 'error')
+            throw error
+        }
+    }
+
+    /**
+     * 密码提交后，Microsoft 常会再要求 2FA（Authenticator 数字匹配 / SMS / 邮箱）。
+     * enterPassword 仅在“密码框本身缺失”时才路由到 handle2FA，这里补上“密码提交之后”的检测，
+     * 只有确实出现 2FA 元素时才进入 handle2FA，避免影响无 2FA 账户的正常流程。
+     */
+    private async handlePostPasswordTwoFactor(page: Page): Promise<void> {
+        try {
+            const alreadyIn = await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 2000 }).then(() => true).catch(() => false)
+            if (alreadyIn) {
+                return
+            }
+
+            const twoFAVisible = await Promise.race([
+                page.waitForSelector('input[name="otc"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('input[name="proofconfirmation"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('#displaySign, [data-testid="displaySign"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false),
+                page.waitForSelector('button[aria-describedby="confirmSendTitle"]', { state: 'visible', timeout: 4000 }).then(() => true).catch(() => false)
+            ])
+
+            if (twoFAVisible) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', '2FA challenge detected after password entry — handling')
                 await this.handle2FA(page)
+            }
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Post-password 2FA detection failed: ${error}`, 'warn')
         }
     }
 
@@ -315,13 +416,8 @@ export class Login {
 
     private async authEmailVerification(page: Page) {
         this.bot.log(this.bot.isMobile, 'LOGIN', 'Email verification required. Please check your email and enter the code.')
-        
-        const code = await new Promise<string>((resolve) => {
-            rl.question('Enter email verification code:\n', (input) => {
-                rl.close()
-                resolve(input)
-            })
-        })
+
+        const code = await this.promptForInput('Enter email verification code:\n')
 
         await page.fill('input[name="proofconfirmation"]', code)
         await page.keyboard.press('Enter')
@@ -361,7 +457,7 @@ export class Login {
             
             if (element) {
                 const code = await element.textContent()
-                this.bot.log(this.bot.isMobile, 'LOGIN', `2FA code found: ${code}`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `2FA code found: ${code}`)
                 return code
             }
             
@@ -400,7 +496,7 @@ export class Login {
         // eslint-disable-next-line no-constant-condition
         while (true) {
             try {
-                this.bot.log(this.bot.isMobile, 'LOGIN', `Press the number ${numberToPress} on your Authenticator app to approve the login`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `Press the number ${numberToPress} on your Authenticator app to approve the login`)
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'If you press the wrong number or the "DENY" button, try again in 60 seconds')
 
                 await page.waitForSelector('form[name="f1"]', { state: 'detached', timeout: 60000 })
@@ -418,12 +514,7 @@ export class Login {
     private async authSMSVerification(page: Page) {
         this.bot.log(this.bot.isMobile, 'LOGIN', 'SMS 2FA code required. Waiting for user input...')
 
-        const code = await new Promise<string>((resolve) => {
-            rl.question('Enter 2FA code:\n', (input) => {
-                rl.close()
-                resolve(input)
-            })
-        })
+        const code = await this.promptForInput('Enter 2FA code:\n')
 
         await page.fill('input[name="otc"]', code)
         await page.keyboard.press('Enter')
@@ -497,6 +588,7 @@ export class Login {
         let code: string
 
         const authStart = Date.now()
+        const maxWaitMs = Number(process.env.MOBILE_OAUTH_TIMEOUT_MS || 180000)
         this.bot.log(this.bot.isMobile, 'LOGIN-APP', 'Waiting for authorization...')
         // eslint-disable-next-line no-constant-condition
         while (true) {
@@ -510,6 +602,11 @@ export class Login {
             currentUrl = new URL(page.url())
             // Shorter wait to react faster to passkey prompt
             await this.bot.utils.wait(1000)
+
+            const elapsed = Date.now() - authStart
+            if (elapsed > maxWaitMs) {
+                throw new LoginTimeoutError(`OAuth authorization timeout after ${Math.round(elapsed / 1000)}s`)
+            }
         }
 
         const body = new URLSearchParams()
@@ -539,18 +636,40 @@ export class Login {
 
     private async checkLoggedIn(page: Page) {
         const targetHostname = 'rewards.bing.com'
-        const targetPathname = '/'
+
+        // DEBUG: verify Microsoft auth cookies exist after the OAuth round-trip
+        const cookies = await page.context().cookies()
+        const authCookieNames = cookies
+            .filter(c => c.domain.includes('login.live.com') || c.domain.includes('microsoftonline') || c.domain.includes('rewards.bing.com') || c.domain.includes('.bing.com'))
+            .map(c => `${c.name}@${c.domain}`)
+        this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `Auth cookies after password submit: ${authCookieNames.join(', ') || 'NONE'}`)
 
         const start = Date.now()
         const maxWaitMs = Number(process.env.LOGIN_MAX_WAIT_MS || 180000) // default 3 minutes
         let guidanceLogged = false
+        let dashboardNavigationAttempted = false
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
             await this.dismissLoginMessages(page)
             const currentURL = new URL(page.url())
-            if (currentURL.hostname === targetHostname && currentURL.pathname === targetPathname) {
+            // New Rewards UI: a successful login lands on the authenticated SPA at
+            // rewards.bing.com/dashboard. The old "/" path + RewardsPortal markers are gone, so treat
+            // reaching the rewards host past the welcome/sign-in pages as logged in.
+            const onRewardsHost = currentURL.hostname === targetHostname || currentURL.hostname.endsWith('.rewards.bing.com')
+            // /about is the anonymous welcome page (as are /welcome, /signin) - NOT logged in
+            const onLoginPage = currentURL.pathname.includes('/welcome') || currentURL.pathname.includes('/signin') || currentURL.pathname.includes('/createuser') || currentURL.pathname.includes('/about')
+            if (onRewardsHost && !onLoginPage) {
                 break
+            }
+
+            // After the OAuth round-trip the SPA returns to the anonymous page it started from
+            // (e.g. /about) and does NOT auto-forward to the dashboard. Navigate there once.
+            if (onRewardsHost && onLoginPage && !dashboardNavigationAttempted) {
+                dashboardNavigationAttempted = true
+                this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `OAuth done but SPA stuck on anonymous page (${page.url()}); navigating to /dashboard`)
+                await page.goto('https://rewards.bing.com/dashboard', { waitUntil: 'domcontentloaded' }).catch(() => { })
+                continue
             }
 
             // If we keep looping without prompts for too long, advise and fail fast
@@ -567,8 +686,8 @@ export class Login {
             }
         }
 
-        // Wait for login to complete
-        await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 10000 })
+        // Allow the dashboard SPA to settle (the old RewardsPortal DOM marker no longer exists)
+        await this.bot.utils.wait(2000)
         this.bot.log(this.bot.isMobile, 'LOGIN', 'Successfully logged into the rewards portal')
 
         // 🎯 处理Passkey设置循环问题
@@ -811,15 +930,31 @@ export class Login {
             }
         }
 
-        // KMSI (Keep me signed in) prompt
-        const kmsi = await page.waitForSelector('[data-testid="kmsiVideo"]', { timeout: 800 }).catch(()=>null)
-        if (kmsi) {
-            const yesButton = await page.$('button[data-testid="primaryButton"]')
-            if (yesButton) {
-                await yesButton.click().catch(()=>{})
-                this.bot.log(this.bot.isMobile, 'LOGIN-KMSI', 'KMSI dialog detected -> accepted (Yes)')
-                await page.waitForTimeout(300)
-                didSomething = true
+        // KMSI ("Stay signed in?" / Keep me signed in) prompt — handle the classic kmsiVideo variant
+        // AND the newer text-based one (button[type=submit] はい/Yes, no stable id/data-testid).
+        if (!didSomething) {
+            const kmsiClassic = await page.$('[data-testid="kmsiVideo"]').catch(() => null)
+            const pageTitle = await page.title().catch(() => '')
+            const titleEl2 = await page.$('[data-testid="title"], #loginHeader').catch(() => null)
+            const titleTxt = ((titleEl2 ? (await titleEl2.textContent().catch(() => '')) : '') || '') + ' ' + pageTitle
+            const looksLikeKmsi = !!kmsiClassic || /stay signed in|keep me signed|サインインの状態を維持|保持登录状态|로그인 상태 유지|angemeldet bleiben|rester connecté/i.test(titleTxt)
+            if (looksLikeKmsi) {
+                let clicked = false
+                for (const sel of ['#idSIButton9', 'button[data-testid="primaryButton"]']) {
+                    const btn = await page.$(sel).catch(() => null)
+                    if (btn) { await btn.click().catch(() => { }); clicked = true; break }
+                }
+                if (!clicked) {
+                    for (const t of ['はい', 'Yes', '是', '예', 'Ja', 'Oui', 'Sí']) {
+                        const btn = page.locator(`button[type="submit"]:has-text("${t}"), button:has-text("${t}")`).first()
+                        if (await btn.isVisible().catch(() => false)) { await btn.click().catch(() => { }); clicked = true; break }
+                    }
+                }
+                if (clicked) {
+                    this.bot.log(this.bot.isMobile, 'LOGIN-KMSI', 'KMSI "Stay signed in?" detected -> accepted (Yes)')
+                    await page.waitForTimeout(500)
+                    didSomething = true
+                }
             }
         }
 
@@ -828,7 +963,7 @@ export class Login {
             const now = Date.now()
             if (this.noPromptIterations === 1 || (now - this.lastNoPromptLog) > 10000) {
                 this.lastNoPromptLog = now
-                this.bot.log(this.bot.isMobile, 'LOGIN-NO-PROMPT', `No dialogs (x${this.noPromptIterations})`)
+                this.bot.log(this.bot.isMobile, 'LOGIN-NO-PROMPT', `No dialogs (x${this.noPromptIterations}) | page: "${await page.title().catch(() => '')}"`)
                 // Reset counter if it grows large to keep number meaningful
                 if (this.noPromptIterations > 50) this.noPromptIterations = 0
             }
@@ -882,19 +1017,26 @@ export class Login {
         try {
             this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'Verifying Bing login')
             await page.goto('https://www.bing.com/fd/auth/signin?action=interactive&provider=windows_live_id&return_url=https%3A%2F%2Fwww.bing.com%2F')
+            this.bot.log(this.bot.isMobile, 'LOGIN-BING-DEBUG', `After goto: ${page.url()}`)
 
-            const maxIterations = 5
+            const maxIterations = 10
+            let verified = false
 
             for (let iteration = 1; iteration <= maxIterations; iteration++) {
                 const currentUrl = new URL(page.url())
+                this.bot.log(this.bot.isMobile, 'LOGIN-BING-DEBUG', `Iteration ${iteration}: ${page.url()}`)
 
-                if (currentUrl.hostname === 'www.bing.com' && currentUrl.pathname === '/') {
+                // CN mainland egress redirects www.bing.com -> cn.bing.com, accept any bing.com host
+                // (homepage or search results page - the silent sign-in can land on either)
+                if ((currentUrl.hostname === 'www.bing.com' || currentUrl.hostname === 'cn.bing.com' || currentUrl.hostname.endsWith('.bing.com')) && (currentUrl.pathname === '/' || currentUrl.pathname === '/search')) {
                     await this.bot.browser.utils.tryDismissAllMessages(page)
 
                     const loggedIn = await this.checkBingLoginStatus(page)
-                    // If mobile browser, skip this step
-                    if (loggedIn || this.bot.isMobile) {
+                    const hasAuthCookie = await this.hasBingAuthCookie(page)
+                    this.bot.log(this.bot.isMobile, 'LOGIN-BING-DEBUG', `Bing login marker (#id_n): ${loggedIn} | auth cookie: ${hasAuthCookie}`)
+                    if (loggedIn || hasAuthCookie || this.bot.isMobile) {
                         this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'Bing login verification passed!')
+                        verified = true
                         break
                     }
                 }
@@ -902,8 +1044,13 @@ export class Login {
                 await this.bot.utils.wait(1000)
             }
 
+            if (!verified) {
+                throw new Error('Bing login verification failed')
+            }
+
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'LOGIN-BING', 'An error occurred:' + error, 'error')
+            throw error
         }
     }
 
@@ -916,12 +1063,18 @@ export class Login {
         }
     }
 
+    /** Bing 认证 cookie（_C_Auth@*.bing.com）存在即视为已登录（元素偶发未及时渲染时的兜底）。 */
+    private async hasBingAuthCookie(page: Page): Promise<boolean> {
+        const cookies = await page.context().cookies()
+        return cookies.some(c => c.name === '_C_Auth' && /(^|\.)bing\.com$/i.test(c.domain))
+    }
+
     private async checkAccountLocked(page: Page) {
         await this.bot.utils.wait(2000)
         const isLocked = await page.waitForSelector('#serviceAbuseLandingTitle', { state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
         if (isLocked) {
             this.bot.log(this.bot.isMobile, 'CHECK-LOCKED', 'This account has been locked! Remove the account from "accounts.json" and restart!', 'error')
-            throw new Error('This account has been locked! Remove the account from "accounts.json" and restart!')
+            throw new AccountLockedError('This account has been locked! Remove the account from "accounts.json" and restart!')
         }
     }
 
@@ -974,7 +1127,7 @@ export class Login {
                     // Authenticator App验证
                     const code = await foundElement.textContent()
                     if (code && code.trim()) {
-                        this.bot.log(this.bot.isMobile, 'LOGIN-MOBILE-2FA', `Found Authenticator code on mobile: ${code}`)
+                        this.bot.log(this.bot.isMobile, 'LOGIN-2FA-CODE', `Found Authenticator code on mobile: ${code}`)
                         
                         // 检查是否与桌面端代码冲突
                         if (this.bot.config.parallel) {

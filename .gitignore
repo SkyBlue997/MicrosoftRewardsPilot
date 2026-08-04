@@ -7,3 +7,17 @@ notes
 *.log
 *.tmp
 .env
+# Local per-user config holding real credentials/secrets (keep only the .example templates in git)
+config/accounts.json
+config/accounts.dev.json
+config/config.json
+config/config.dev.json
+# Local reverse-engineering / traffic-capture artifacts, do not commit
+# (HAR captures contain live auth tokens & cookies — same sensitivity as sessions/)
+edge.apk
+*.apk
+*.har
+# IDE / editor
+.vscode/
+.idea/
+*.tsbuildinfo
