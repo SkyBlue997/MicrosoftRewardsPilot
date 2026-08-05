@@ -5,6 +5,7 @@ import { RewardsApi, ApiPromotion } from './RewardsApi'
 import { HumanBehaviorSimulator } from '../anti-detection/human-behavior'
 import { IntelligentDelaySystem } from '../anti-detection/intelligent-delay'
 import { GeoLanguageDetector } from '../../utils/GeoLanguage'
+import { GoogleSearch } from '../../interfaces/Search'
 import { MicrosoftRewardsBot } from '../index'
 
 /**
@@ -31,8 +32,8 @@ export class SearchRunner {
         private accountEmail?: string
     ) {}
 
-    private log(message: string, type: 'log' | 'warn' = 'log', color?: 'green' | 'yellow'): void {
-        this.bot.log(this.bot.isMobile, 'SEARCH', message, type, color)
+    private log(message: string, type: 'log' | 'warn' = 'log', color?: 'green' | 'yellow', func: string = 'SEARCH'): void {
+        this.bot.log(this.bot.isMobile, func, message, type, color)
     }
 
     /** Run searches until the daily search promotion is complete (or a safety cap is hit). */
@@ -206,18 +207,92 @@ export class SearchRunner {
         '春节', '中秋节', '国庆节', '双十一', '双十二'
     ]
 
+    /** uapis.cn 热搜榜默认 type（配置留空时使用）。 */
+    private static readonly DEFAULT_UAPIS_TYPES = ['starrail', 'genshin', 'honkai']
+
     /**
-     * 拉取 uapis.cn 热搜（方案0），不走代理直连，返回去重后的中文热搜标题。
+     * 构建中文热搜备选词池：从所有已启用的渠道（uapis / 百度 / 微博 / 本地备用词表）拉取热搜，
+     * 每个话题都附加 generateChineseRelatedTerms 后缀；随后打印本次候选的全部搜索词清单，
+     * 最后展开成「话题 + 相关词」的扁平字符串池返回（供 buildQueries 混入当日词库）。
      */
     private async buildChinaTrendPool(): Promise<string[]> {
         const chinaCfg = this.bot.config.searchSettings?.chinaRegionAdaptation
-        if (!chinaCfg?.enabled || !chinaCfg.useUapisTrends) return []
+        if (!chinaCfg?.enabled) return []
 
-        const terms: string[] = []
+        const items: GoogleSearch[] = []
+        const sources: string[] = []
+
+        // 方案0：uapis（可配置热搜榜 type，留空用默认三个）
+        if (chinaCfg.useUapisTrends) {
+            const uapisTypes = this.getUapisTypes()
+            const uapisTrends = await this.getUapisTrends(uapisTypes)
+            items.push(...uapisTrends)
+            sources.push(`uapis(${uapisTypes.join(',')})`)
+        }
+
+        // 方案1：百度热搜
+        if (chinaCfg.useBaiduTrends) {
+            const baiduTrends = await this.getBaiduTrends()
+            items.push(...baiduTrends)
+            sources.push('baidu')
+        }
+
+        // 方案2：微博热搜
+        if (chinaCfg.useWeiboTrends) {
+            const weiboTrends = await this.getWeiboTrends()
+            items.push(...weiboTrends)
+            sources.push('weibo')
+        }
+
+        // 数量不足时补充本地备用词
+        if (chinaCfg.fallbackToLocalQueries && items.length < 50) {
+            items.push(...this.getChineseFallbackQueries())
+            sources.push('local-fallback')
+        }
+
+        // 按 topic 去重
+        const seen = new Set<string>()
+        const candidates: GoogleSearch[] = []
+        for (const item of items) {
+            if (seen.has(item.topic)) continue
+            seen.add(item.topic)
+            candidates.push(item)
+        }
+
+        // 打印本次候选的全部搜索词清单（各启用渠道 + generateChineseRelatedTerms 后缀）
+        if (candidates.length > 0) {
+            this.log(`China search candidates: ${candidates.length} topics (sources: ${sources.join(', ')})`, 'log', undefined, 'SEARCH-CHINA-CANDIDATES')
+            for (const item of candidates) {
+                this.log(`  candidate: "${item.topic}" => [${item.related.join(', ')}]`, 'log', undefined, 'SEARCH-CHINA-CANDIDATES')
+            }
+        }
+
+        // 展开为「话题 + 相关词」的扁平词池
+        const flat: string[] = []
+        for (const item of candidates) {
+            flat.push(item.topic, ...item.related)
+        }
+        return [...new Set(flat)]
+    }
+
+    /** 读取配置的 uapis type 列表；为空或缺失时回退到默认的三个。 */
+    private getUapisTypes(): string[] {
+        const chinaCfg = this.bot.config.searchSettings?.chinaRegionAdaptation
+        const configured = (chinaCfg?.uapiTypes || [])
+            .map(type => String(type).trim())
+            .filter(Boolean)
+        return configured.length > 0 ? configured : SearchRunner.DEFAULT_UAPIS_TYPES
+    }
+
+    /**
+     * 拉取 uapis.cn 热搜（方案0），不走代理直连；每个话题附加 generateChineseRelatedTerms 后缀。
+     */
+    private async getUapisTrends(types: string[]): Promise<GoogleSearch[]> {
+        const items: GoogleSearch[] = []
         try {
-            for (const type of ['starrail', 'genshin', 'honkai']) {
+            for (const type of types) {
                 const request: AxiosRequestConfig = {
-                    url: `https://uapis.cn/api/v1/misc/hotboard?type=${type}`,
+                    url: `https://uapis.cn/api/v1/misc/hotboard?type=${encodeURIComponent(type)}`,
                     method: 'GET',
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -229,17 +304,110 @@ export class SearchRunner {
                 if (Array.isArray(list)) {
                     for (const item of list) {
                         const title = item?.title
-                        if (title && String(title).trim()) terms.push(String(title).trim())
+                        if (title && String(title).trim()) {
+                            const topic = String(title).trim()
+                            items.push({ topic, related: this.generateChineseRelatedTerms(topic) })
+                        }
                     }
                 }
             }
-            const unique = [...new Set(terms)]
-            this.log(`UAPIS trends: ${unique.length} Chinese hot-search terms`)
-            return unique
+            this.log(`UAPIS trends: ${items.length} Chinese hot-search terms (types: ${types.join(', ')})`, 'log', undefined, 'UAPIS-TRENDS')
         } catch (error) {
-            this.log(`UAPIS trends failed: ${error}`, 'warn')
-            return []
+            this.log(`UAPIS trends failed: ${error}`, 'warn', undefined, 'UAPIS-TRENDS')
         }
+        return items
+    }
+
+    /** 拉取百度实时热搜榜，不走代理直连。 */
+    private async getBaiduTrends(): Promise<GoogleSearch[]> {
+        const items: GoogleSearch[] = []
+        try {
+            const request: AxiosRequestConfig = {
+                url: 'https://top.baidu.com/board?tab=realtime',
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9'
+                }
+            }
+            const response = await this.bot.axios.request(request, false) // 不使用代理
+            const htmlContent = response.data as string
+            const dataMatch = htmlContent.match(/<!--s-data:(.*?)-->/s)
+            if (dataMatch) {
+                try {
+                    const data = JSON.parse(dataMatch[1] || '{}')?.data?.cards?.[0]?.content || []
+                    for (const item of data.slice(0, 30)) {
+                        if (item.word) {
+                            const topic = String(item.word).trim()
+                            items.push({ topic, related: this.generateChineseRelatedTerms(topic) })
+                        }
+                    }
+                } catch (parseError) {
+                    this.log('Failed to parse Baidu trends data', 'warn', undefined, 'BAIDU-TRENDS')
+                }
+            }
+            this.log(`BAIDU trends: ${items.length} Chinese hot-search terms`, 'log', undefined, 'BAIDU-TRENDS')
+        } catch (error) {
+            this.log(`BAIDU trends failed: ${error}`, 'warn', undefined, 'BAIDU-TRENDS')
+        }
+        return items
+    }
+
+    /** 拉取微博热搜，不走代理直连。 */
+    private async getWeiboTrends(): Promise<GoogleSearch[]> {
+        const items: GoogleSearch[] = []
+        try {
+            const request: AxiosRequestConfig = {
+                url: 'https://weibo.com/ajax/side/hotSearch',
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Referer': 'https://weibo.com/'
+                }
+            }
+            const response = await this.bot.axios.request(request, false) // 不使用代理
+            const realtime = response.data?.data?.realtime
+            if (Array.isArray(realtime)) {
+                for (const item of realtime.slice(0, 30)) {
+                    if (item.word) {
+                        const topic = String(item.word).trim()
+                        items.push({ topic, related: this.generateChineseRelatedTerms(topic) })
+                    }
+                }
+            }
+            this.log(`WEIBO trends: ${items.length} Chinese hot-search terms`, 'log', undefined, 'WEIBO-TRENDS')
+        } catch (error) {
+            this.log(`WEIBO trends failed: ${error}`, 'warn', undefined, 'WEIBO-TRENDS')
+        }
+        return items
+    }
+
+    /** 为中文热搜话题生成 3-5 个相关搜索词后缀。 */
+    private generateChineseRelatedTerms(baseQuery: string): string[] {
+        const patterns = [
+            `${baseQuery}更新`,
+            `${baseQuery}是什么`,
+            `${baseQuery}怎么样`,
+            `${baseQuery}详情`,
+            `${baseQuery}原因`,
+            `${baseQuery}结果`,
+            `${baseQuery}影响`,
+            `${baseQuery}评论`
+        ]
+        const selectedCount = 3 + Math.floor(Math.random() * 3)
+        return this.bot.utils.shuffleArray(patterns).slice(0, selectedCount)
+    }
+
+    /** 本地备用中文搜索词（与 ZH_SAFE_TOPICS 保持一致，附带相关词后缀）。 */
+    private getChineseFallbackQueries(): GoogleSearch[] {
+        const currentDate = new Date()
+        const topics = [
+            `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月新闻`,
+            ...SearchRunner.ZH_SAFE_TOPICS
+        ]
+        return topics.map(topic => ({ topic, related: this.generateChineseRelatedTerms(topic) }))
     }
 
     /**

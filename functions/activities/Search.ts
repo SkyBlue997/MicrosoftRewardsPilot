@@ -1592,6 +1592,18 @@ export class Search extends Workers {
                 queryTerms.push(...fallbackQueries)
             }
 
+            // 去重后打印本次候选的全部搜索词清单（各启用渠道 + generateChineseRelatedTerms 后缀）
+            const seen = new Set<string>()
+            const uniqueTerms = queryTerms.filter(item => {
+                if (seen.has(item.topic)) return false
+                seen.add(item.topic)
+                return true
+            })
+            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `China search candidates: ${uniqueTerms.length} topics`)
+            for (const item of uniqueTerms) {
+                this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `  candidate: "${item.topic}" => [${item.related.join(', ')}]`)
+            }
+
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${queryTerms.length} search queries for China region`)
 
         } catch (error) {
@@ -1607,16 +1619,21 @@ export class Search extends Workers {
 
     /**
      * 获取 uapis 热搜数据（方案0）
-     * 从 https://uapis.cn/api/v1/misc/hotboard 拉取三类热搜榜，不走代理，直连获取
+     * 从 https://uapis.cn/api/v1/misc/hotboard 拉取配置的热搜榜 type（为空时使用默认的三个），
+     * 不走代理，直连获取
      */
     private async getUapisTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
-        const types = ['starrail', 'genshin', 'honkai']
+        const chinaConfig = this.bot.config.searchSettings.chinaRegionAdaptation
+        const configuredTypes = (chinaConfig?.uapiTypes || [])
+            .map(type => String(type).trim())
+            .filter(Boolean)
+        const types = configuredTypes.length > 0 ? configuredTypes : ['starrail', 'genshin', 'honkai']
 
         try {
             for (const type of types) {
                 const request: AxiosRequestConfig = {
-                    url: `https://uapis.cn/api/v1/misc/hotboard?type=${type}`,
+                    url: `https://uapis.cn/api/v1/misc/hotboard?type=${encodeURIComponent(type)}`,
                     method: 'GET',
                     headers: {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -1639,7 +1656,7 @@ export class Search extends Workers {
                 }
             }
 
-            this.bot.log(this.bot.isMobile, 'UAPIS-TRENDS', `Fetched ${queryTerms.length} trends from UAPIS`)
+            this.bot.log(this.bot.isMobile, 'UAPIS-TRENDS', `Fetched ${queryTerms.length} trends from UAPIS (types: ${types.join(', ')})`)
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'UAPIS-TRENDS', `Error fetching UAPIS trends: ${error}`, 'warn')

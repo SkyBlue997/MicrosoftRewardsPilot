@@ -82,6 +82,11 @@ export interface ConfigWorkers {
 export interface ConfigChinaRegion {
     enabled: boolean;
     useUapisTrends: boolean;
+    /**
+     * uapis.cn 热搜榜的 type 列表（如 starrail/genshin/honkai/zhihu/bilibili/weibo...）。
+     * 留空或缺失时使用默认的三个（starrail、genshin、honkai）。
+     */
+    uapiTypes?: string[];
     useBaiduTrends: boolean;
     useWeiboTrends: boolean;
     fallbackToLocalQueries: boolean;

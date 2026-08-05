@@ -59,11 +59,11 @@
             "min": "180s",
             "max": "360s"
         },
-        "retryMobileSearchAmount": 0,
+        "retryMobileSearchAmount": 1,
         "multiLanguage": {
             "enabled": true,
             "autoDetectLocation": true,
-            "fallbackLanguage": "ja",
+            "fallbackLanguage": "en",
             "supportedLanguages": ["ja", "en", "zh-CN", "ko", "de", "fr", "es"]
         },
         "autoTimezone": {
@@ -72,11 +72,40 @@
             "validateMatch": true,
             "logChanges": true
         },
+        "humanBehavior": {
+            "typingErrorRate": 0.12,
+            "thinkingPauseEnabled": true,
+            "randomScrollEnabled": true,
+            "clickRandomEnabled": true,
+            "timeBasedDelayEnabled": true,
+            "adaptiveDelayEnabled": true,
+            "cautionModeEnabled": true
+        },
+        "antiDetection": {
+            "ultraMode": true,
+            "stealthLevel": "ultimate",
+            "dynamicDelayMultiplier": 4.0,
+            "progressiveBackoff": true,
+            "maxConsecutiveFailures": 1,
+            "cooldownPeriod": "20min",
+            "sessionSimulation": true,
+            "multitaskingEnabled": true,
+            "behaviorRandomization": true,
+            "timeBasedScheduling": true,
+            "humanErrorSimulation": true,
+            "deepPageInteraction": true,
+            "canvasNoise": true,
+            "sensorDataInjection": true,
+            "networkBehaviorMimic": true,
+            "sessionBreaking": true,
+            "realUserErrors": true
+        },
         "chinaRegionAdaptation": {
-            "enabled": false,
-            "useUapisTrends": true,
+            "enabled": true,
+			"useUapisTrends": true,
+            "uapiTypes": ["51cto", "csdn", "juejin"],
             "useBaiduTrends": true,
-            "useWeiboTrends": true,
+            "useWeiboTrends": false,
             "fallbackToLocalQueries": true
         }
     },
