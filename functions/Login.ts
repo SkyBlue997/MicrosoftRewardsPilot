@@ -222,34 +222,14 @@ export class Login {
     private async enterPassword(page: Page, password: string) {
         const passwordInputSelector = 'input[type="password"]'
         try {
-            const viewFooter = await page.waitForSelector('[data-testid="viewFooter"]', { timeout: 2000 }).catch(() => null)
-            if (viewFooter) {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Page "Get a code to sign in" found by "viewFooter"')
+            this.bot.log(this.bot.isMobile, 'LOGIN-DEBUG', `enterPassword: ${page.url()} title="${await page.title().catch(() => '')}"`)
 
-                const otherWaysButton = await viewFooter.$('span[role="button"]')
-                if (otherWaysButton) {
-                    await otherWaysButton.click()
-                    await this.bot.utils.wait(3000)
-
-                    // After "other ways to sign in", the password field is often shown directly. If not,
-                    // pick the explicit "Use your password" option. (The previous blind nth(1) list click
-                    // could land on the create-account option and navigate to signup.live.com.)
-                    const passwordVisible = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 3000 }).catch(() => null)
-                    if (!passwordVisible) {
-                        const usePasswordTexts = ['Use your password', 'パスワードを使用する', '使用密码', '비밀번호 사용', 'Passwort verwenden', 'Utiliser votre mot de passe', 'Usar tu contraseña']
-                        for (const t of usePasswordTexts) {
-                            const opt = page.locator(`[role="listitem"]:has-text("${t}"), [role="button"]:has-text("${t}")`).first()
-                            if (await opt.isVisible().catch(() => false)) {
-                                await opt.click().catch(() => { })
-                                break
-                            }
-                        }
-                    }
-                }
+            // 部分账户在 email 提交后密码框会直接出现（无需额外导航）
+            let passwordField = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 1500 }).catch(() => null)
+            if (!passwordField) {
+                await this.navigateToPasswordPage(page)
+                passwordField = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 5000 }).catch(() => null)
             }
-
-            // Wait for password field
-            const passwordField = await page.waitForSelector(passwordInputSelector, { state: 'visible', timeout: 5000 }).catch(() => null)
             if (!passwordField) {
                 this.bot.log(this.bot.isMobile, 'LOGIN', 'Password field not found, possibly 2FA required', 'warn')
                 await this.handle2FA(page)
@@ -294,6 +274,286 @@ export class Login {
             this.bot.log(this.bot.isMobile, 'LOGIN', `Password entry failed: ${error}`, 'error')
             throw error
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Microsoft 登录页（login.live.com / login.microsoftonline.com）的页面变体很多：
+    //   A) "Verify your email" 页脚直接有 "Use your password"（直接点击）
+    //   B) "Verify your email" 页脚是 "Other ways to sign in"（点击后在列表里选 password）
+    //   C) 经典流程 "Already received a code?" -> "Get a code" 页，页脚有 "Use your password"
+    //   D) 特殊账户：Get a code 页脚没有 "Use your password" -> 返回上一页改走 Other ways -> password
+    // 下面按 A -> B -> C -> D -> 旧版兜底 的顺序智能导航。
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    private static readonly PASSWORD_OPTION_PATTERNS: RegExp[] = [
+        /use your password/i,
+        /使用密码|使用密碼/i,
+        /パスワードを使用する/i,
+        /비밀번호\s*사용/i,
+        /passwort verwenden/i,
+        /utiliser votre mot de passe/i,
+        /usar (tu )?contraseña/i,
+    ]
+
+    private static readonly OTHER_WAYS_PATTERNS: RegExp[] = [
+        /other ways? to sign in/i,
+        /其他.*(登录|登入|方式)/i,
+        /別の.*(サインイン|方法)/i,
+        /다른.*(로그인|방법)/i,
+        /andere (anmelde)?optionen|andere möglichkeiten/i,
+        /autres (moyens|façons)/i,
+        /otras (formas|maneras)/i,
+    ]
+
+    private static readonly ALREADY_CODE_PATTERNS: RegExp[] = [
+        /already (received|have).*code/i,
+        /(已有|已经收到|已收到).*(验证码|驗證碼|代码|代碼)/i,
+        /コードを受け取/i,
+        /이미 코드/i,
+        /code bereits erhalten/i,
+        /déjà reçu un code/i,
+        /ya (recibiste|tienes).*código/i,
+    ]
+
+    /** 归一化文本：合并空白并 trim。 */
+    private normalizeOptionText(text: string | null | undefined): string {
+        return (text || '').replace(/\s+/g, ' ').trim()
+    }
+
+    /**
+     * 收集当前页面所有可见的可点击选项（页脚 span/a/button + role=listitem + 通用 role=button/a/button），
+     * 返回去重后的列表，用于调试输出与智能选择。
+     */
+    private async collectLoginOptions(page: Page): Promise<Array<{ el: any; text: string }>> {
+        const options: Array<{ el: any; text: string }> = []
+        const seen = new Set<string>()
+        const selector = [
+            '[data-testid="viewFooter"] [role="button"]',
+            '[data-testid="viewFooter"] a',
+            '[data-testid="viewFooter"] button',
+            '[role="listitem"]',
+            '[role="button"]',
+            'a',
+            'button',
+        ].join(', ')
+        const handles = await page.$$(selector).catch(() => [] as any[])
+        for (const el of handles) {
+            const text = this.normalizeOptionText(await el.textContent().catch(() => ''))
+            if (!text) continue
+            const visible = await el.isVisible().catch(() => false)
+            if (!visible) continue
+            const tag = await el.evaluate((n: Element) => `${n.tagName}#${n.getAttribute('id') || ''}`).catch(() => '')
+            const key = `${tag}|${text}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            options.push({ el, text })
+        }
+        return options
+    }
+
+    /** 打印当前页面的所有可点击选项（调试用，展示每个按钮的名字）。 */
+    private async logLoginOptions(page: Page, stage: string, options: Array<{ el: any; text: string }>): Promise<void> {
+        const title = await page.title().catch(() => '')
+        this.bot.log(this.bot.isMobile, 'LOGIN-FLOW', `[${stage}] url=${page.url()} title="${title}"`)
+        if (options.length === 0) {
+            this.bot.log(this.bot.isMobile, 'LOGIN-FLOW', `[${stage}] no clickable options found`)
+            return
+        }
+        options.forEach((o, i) => {
+            this.bot.log(this.bot.isMobile, 'LOGIN-FLOW', `[${stage}] option[${i}]="${o.text}"`)
+        })
+    }
+
+    /** 在选项列表中按正则匹配目标项。 */
+    private findLoginOption(options: Array<{ el: any; text: string }>, patterns: RegExp[]): { el: any; text: string } | null {
+        return options.find(o => patterns.some(p => p.test(o.text))) || null
+    }
+
+    /** 人类化点击某个选项。 */
+    private async clickLoginOption(page: Page, option: { el: any; text: string }): Promise<void> {
+        try {
+            await this.humanBehavior.simulateThinking()
+            const box = await option.el.boundingBox()
+            if (box) {
+                await this.humanBehavior.humanClick(page, box.x + box.width / 2, box.y + box.height / 2)
+            } else {
+                await option.el.click()
+            }
+        } catch {
+            await option.el.click().catch(() => { })
+        }
+    }
+
+    /** 在 "Other ways to sign in" 列表页（或任何包含密码选项的页面）选择密码选项。 */
+    private async pickPasswordFromList(page: Page): Promise<boolean> {
+        // 有些账户点击 Other ways 后密码框会直接出现
+        const pwField = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 2500 }).catch(() => null)
+        if (pwField) {
+            return true
+        }
+        let opts = await this.collectLoginOptions(page)
+        await this.logLoginOptions(page, 'other-ways-list', opts)
+        let pwOpt = this.findLoginOption(opts, Login.PASSWORD_OPTION_PATTERNS)
+        if (!pwOpt) {
+            // 密码选项可能藏在 "Show more options" 折叠项里
+            const moreOpt = opts.find(o => /show more options|显示更多|その他のオプション|추가 옵션/i.test(o.text))
+            if (moreOpt) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', `Clicking "${moreOpt.text}" to reveal more options`)
+                await this.clickLoginOption(page, moreOpt)
+                await this.bot.utils.wait(2000)
+                opts = await this.collectLoginOptions(page)
+                await this.logLoginOptions(page, 'other-ways-list(more)', opts)
+                pwOpt = this.findLoginOption(opts, Login.PASSWORD_OPTION_PATTERNS)
+            }
+        }
+        if (pwOpt) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Selecting password option: "${pwOpt.text}"`)
+            await this.clickLoginOption(page, pwOpt)
+            await this.bot.utils.wait(2500)
+            const pwField2 = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 2500 }).catch(() => null)
+            return !!pwField2
+        }
+        this.bot.log(this.bot.isMobile, 'LOGIN', 'No password option found on this page', 'warn')
+        return false
+    }
+
+    /**
+     * 返回上一个登录视图。Microsoft 新登录流程是同一 URL 内的 SPA 视图切换，
+     * 直接 page.goBack() 可能退到登录页之外，所以优先点页面自带的 Back 按钮，
+     * 最后才用浏览器历史。
+     */
+    private async goBackToPreviousLoginView(page: Page): Promise<void> {
+        const backSelectors = [
+            '[data-testid="backButton"]',
+            '#idBtn_Back',
+            'button[aria-label*="back" i]',
+            'a[aria-label*="back" i]',
+        ]
+        for (const sel of backSelectors) {
+            const el = await page.$(sel).catch(() => null)
+            if (el && await el.isVisible().catch(() => false)) {
+                await this.clickLoginOption(page, { el, text: '' })
+                this.bot.log(this.bot.isMobile, 'LOGIN', 'Clicked back button to return to previous login view')
+                await this.bot.utils.wait(2000)
+                return
+            }
+        }
+        const backPatterns = [/^back$/i, /‹\s*back/i, /返回/i, /戻る/i, /뒤로/i, /zurück/i, /retour/i, /volver/i]
+        const opts = await this.collectLoginOptions(page)
+        const backOpt = opts.find(o => backPatterns.some(p => p.test(o.text)))
+        if (backOpt) {
+            await this.clickLoginOption(page, backOpt)
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Clicked "${backOpt.text}" to go back`)
+            await this.bot.utils.wait(2000)
+            return
+        }
+        this.bot.log(this.bot.isMobile, 'LOGIN', 'No back button found; falling back to browser history')
+        await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => { })
+        await this.bot.utils.wait(2000)
+    }
+
+    /** 旧版兜底：点 footer 第一个 span[role="button"]，然后按文本找 "Use your password"。 */
+    private async legacyPasswordNavigation(page: Page): Promise<void> {
+        const viewFooter = await page.waitForSelector('[data-testid="viewFooter"]', { timeout: 2000 }).catch(() => null)
+        if (viewFooter) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', 'Using legacy fallback: clicking first footer button')
+            const otherWaysButton = await viewFooter.$('span[role="button"]')
+            if (otherWaysButton) {
+                await this.clickLoginOption(page, { el: otherWaysButton, text: '' })
+                await this.bot.utils.wait(3000)
+            }
+        }
+        const passwordVisible = await page.waitForSelector('input[type="password"]', { state: 'visible', timeout: 3000 }).catch(() => null)
+        if (!passwordVisible) {
+            const usePasswordTexts = ['Use your password', 'パスワードを使用する', '使用密码', '비밀번호 사용', 'Passwort verwenden', 'Utiliser votre mot de passe', 'Usar tu contraseña']
+            for (const t of usePasswordTexts) {
+                const opt = page.locator(`[role="listitem"]:has-text("${t}"), [role="button"]:has-text("${t}")`).first()
+                if (await opt.isVisible().catch(() => false)) {
+                    await opt.click().catch(() => { })
+                    break
+                }
+            }
+        }
+    }
+
+    /** 从 email 提交后的页面（通常是 "Verify your email"）导航到密码输入页。 */
+    private async navigateToPasswordPage(page: Page): Promise<void> {
+        // 1) 等待当前页页脚出现（email 提交后通常是 "Verify your email"）
+        const viewFooter = await page.waitForSelector('[data-testid="viewFooter"]', { timeout: 4000 }).catch(() => null)
+        if (!viewFooter) {
+            // 没有经典页脚：可能已经在 Other ways 列表页，直接尝试选 password
+            if (await this.pickPasswordFromList(page)) return
+            await this.legacyPasswordNavigation(page)
+            return
+        }
+
+        let opts = await this.collectLoginOptions(page)
+        await this.logLoginOptions(page, 'verify-email', opts)
+
+        // A) 当前页直接有 password 选项 -> 点击
+        let pwOpt = this.findLoginOption(opts, Login.PASSWORD_OPTION_PATTERNS)
+        if (pwOpt) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Direct password option found: "${pwOpt.text}"`)
+            await this.clickLoginOption(page, pwOpt)
+            await this.bot.utils.wait(2500)
+            return
+        }
+
+        // B) "Other ways to sign in" -> 点击后在新页面选 password
+        const otherWays = this.findLoginOption(opts, Login.OTHER_WAYS_PATTERNS)
+        if (otherWays) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Clicking "${otherWays.text}"`)
+            await this.clickLoginOption(page, otherWays)
+            await this.bot.utils.wait(2500)
+            if (await this.pickPasswordFromList(page)) return
+        }
+
+        // C) 经典：Already received a code? -> Get a code 页
+        const alreadyCode = this.findLoginOption(opts, Login.ALREADY_CODE_PATTERNS)
+        if (alreadyCode) {
+            this.bot.log(this.bot.isMobile, 'LOGIN', `Clicking "${alreadyCode.text}"`)
+            await this.clickLoginOption(page, alreadyCode)
+            await this.bot.utils.wait(2500)
+
+            const footer2 = await page.waitForSelector('[data-testid="viewFooter"]', { timeout: 4000 }).catch(() => null)
+            const opts2 = footer2 ? await this.collectLoginOptions(page) : []
+            await this.logLoginOptions(page, 'get-a-code', opts2)
+
+            pwOpt = this.findLoginOption(opts2, Login.PASSWORD_OPTION_PATTERNS)
+            if (pwOpt) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', `"Use your password" found on get-a-code page: "${pwOpt.text}"`)
+                await this.clickLoginOption(page, pwOpt)
+                await this.bot.utils.wait(2500)
+                return
+            }
+
+            // 特殊账户：Get a code 页没有 "Use your password"，先看当前页是否有 Other ways
+            const otherWays2 = this.findLoginOption(opts2, Login.OTHER_WAYS_PATTERNS)
+            if (otherWays2) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', `No "Use your password" here; clicking "${otherWays2.text}"`)
+                await this.clickLoginOption(page, otherWays2)
+                await this.bot.utils.wait(2500)
+                if (await this.pickPasswordFromList(page)) return
+            }
+
+            // D) 返回上一页，改走 Other ways to sign in -> password
+            this.bot.log(this.bot.isMobile, 'LOGIN', 'No password option on get-a-code page; going back to try "Other ways to sign in"')
+            await this.goBackToPreviousLoginView(page)
+
+            const footer3 = await page.waitForSelector('[data-testid="viewFooter"]', { timeout: 4000 }).catch(() => null)
+            const opts3 = footer3 ? await this.collectLoginOptions(page) : []
+            await this.logLoginOptions(page, 'verify-email(back)', opts3)
+            const otherWays3 = this.findLoginOption(opts3, Login.OTHER_WAYS_PATTERNS)
+            if (otherWays3) {
+                this.bot.log(this.bot.isMobile, 'LOGIN', `Clicking "${otherWays3.text}" after going back`)
+                await this.clickLoginOption(page, otherWays3)
+                await this.bot.utils.wait(2500)
+                if (await this.pickPasswordFromList(page)) return
+            }
+        }
+
+        // E) 兜底：旧版流程
+        await this.legacyPasswordNavigation(page)
     }
 
     /**
@@ -963,6 +1223,9 @@ export class Login {
             const now = Date.now()
             if (this.noPromptIterations === 1 || (now - this.lastNoPromptLog) > 10000) {
                 this.lastNoPromptLog = now
+                // 额外步骤（不影响原流程）：常规弹窗检测未命中时，
+                // 检查页面信息是否包含 "passkey" 且存在 "Cancel" 按钮，存在则尝试点击关闭
+                await this.tryDismissPasskeyCancelModal(page)
                 this.bot.log(this.bot.isMobile, 'LOGIN-NO-PROMPT', `No dialogs (x${this.noPromptIterations}) | page: "${await page.title().catch(() => '')}"`)
                 // Reset counter if it grows large to keep number meaningful
                 if (this.noPromptIterations > 50) this.noPromptIterations = 0
@@ -971,6 +1234,41 @@ export class Login {
             // Reset counters after an interaction
             this.noPromptIterations = 0
         }
+    }
+
+    /**
+     * 额外分支：在即将输出 "No dialogs" 日志时，分析页面信息是否包含 "passkey"，
+     * 并且存在 "Cancel" 按钮（对应 Windows 安全中心触发的浏览器内弹窗）。
+     * 若命中则尝试点击 Cancel 关闭；仅作为附加步骤，不影响原本脚本的执行。
+     */
+    private async tryDismissPasskeyCancelModal(page: Page): Promise<boolean> {
+        try {
+            const pageText = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '')
+            const looksLikePasskey = /passkey|setting up your passkey|set up a passkey|create a passkey/i.test(pageText)
+            if (!looksLikePasskey) {
+                return false
+            }
+
+            const cancelSelectors = [
+                'button:has-text("Cancel")',
+                'button:has-text("取消")',
+                'button:has-text("キャンセル")',
+                '#cancel-button'
+            ]
+            for (const selector of cancelSelectors) {
+                const cancelBtn = page.locator(selector).first()
+                if (await cancelBtn.isVisible().catch(() => false)) {
+                    const btnText = ((await cancelBtn.textContent().catch(() => '')) || '').trim()
+                    await cancelBtn.click().catch(() => { })
+                    this.bot.log(this.bot.isMobile, 'LOGIN-PASSKEY', `Passkey modal detected (text heuristic) -> attempted Cancel (selector: ${selector}${btnText ? `, text: ${btnText}` : ''})`)
+                    await page.waitForTimeout(300)
+                    return true
+                }
+            }
+        } catch {
+            // 忽略错误，绝不干扰原流程
+        }
+        return false
     }
 
     /** Lightweight passkey prompt dismissal used in mobile OAuth loop */

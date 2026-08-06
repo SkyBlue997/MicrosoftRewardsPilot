@@ -8,6 +8,10 @@ import { GeoLanguageDetector } from '../../utils/GeoLanguage'
 import { GoogleSearch } from '../../interfaces/Search'
 import { MicrosoftRewardsBot } from '../index'
 
+// 是否打印中国地区搜索候选词清单（SEARCH-CHINA-CANDIDATES 整体打印开关）
+// 默认 false：不打印搜索词信息；需要排查/核对搜索词时改为 true
+const PRINT_CHINA_CANDIDATES = false
+
 /**
  * Earns Bing search points with REAL, human-paced searches (search points cannot be claimed via the
  * activities API). Progress is read from the dapi search promotion (PCSearch / MobileSearch), so this
@@ -259,17 +263,21 @@ export class SearchRunner {
             candidates.push(item)
         }
 
-        // 打印本次候选的全部搜索词清单（各启用渠道 + generateChineseRelatedTerms 后缀）
-        if (candidates.length > 0) {
-            this.log(`China search candidates: ${candidates.length} topics (sources: ${sources.join(', ')})`, 'log', undefined, 'SEARCH-CHINA-CANDIDATES')
-            for (const item of candidates) {
+        // 去重后打乱候选清单顺序，避免本地多个账号使用相同或相近的搜索内容
+        const shuffledCandidates = this.bot.utils.shuffleArray(candidates) as GoogleSearch[]
+
+        // 按文件顶部 PRINT_CHINA_CANDIDATES 开关决定是否打印本次候选的全部搜索词清单
+        // （各启用渠道 + generateChineseRelatedTerms 后缀），默认不打印
+        if (PRINT_CHINA_CANDIDATES && shuffledCandidates.length > 0) {
+            this.log(`China search candidates: ${shuffledCandidates.length} topics (sources: ${sources.join(', ')})`, 'log', undefined, 'SEARCH-CHINA-CANDIDATES')
+            for (const item of shuffledCandidates) {
                 this.log(`  candidate: "${item.topic}" => [${item.related.join(', ')}]`, 'log', undefined, 'SEARCH-CHINA-CANDIDATES')
             }
         }
 
         // 展开为「话题 + 相关词」的扁平词池
         const flat: string[] = []
-        for (const item of candidates) {
+        for (const item of shuffledCandidates) {
             flat.push(item.topic, ...item.related)
         }
         return [...new Set(flat)]

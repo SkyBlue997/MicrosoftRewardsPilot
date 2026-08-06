@@ -11,6 +11,10 @@ import {Counters, DashboardData} from '../../interfaces/DashboardData'
 import {GoogleSearch} from '../../interfaces/Search'
 import {AxiosRequestConfig} from 'axios'
 
+// 是否打印中国地区搜索候选词清单（SEARCH-CHINA-CANDIDATES 整体打印开关）
+// 默认 false：不打印搜索词信息；需要排查/核对搜索词时改为 true
+const PRINT_CHINA_CANDIDATES = false
+
 // 扩展 Window 和 Navigator 接口以支持非标准属性
 declare global {
     interface Window {
@@ -1553,6 +1557,7 @@ export class Search extends Workers {
      */
     private async getChinaTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
+        let finalTerms: GoogleSearch[] = queryTerms
         const chinaConfig = this.bot.config.searchSettings.chinaRegionAdaptation
 
         // 如果未启用中国地区适配，直接返回备用查询
@@ -1592,19 +1597,27 @@ export class Search extends Workers {
                 queryTerms.push(...fallbackQueries)
             }
 
-            // 去重后打印本次候选的全部搜索词清单（各启用渠道 + generateChineseRelatedTerms 后缀）
+            // 去重后生成最终候选清单，并在打印前打乱内部顺序，
+            // 避免本地多个账号使用相同或相近的搜索内容
             const seen = new Set<string>()
             const uniqueTerms = queryTerms.filter(item => {
                 if (seen.has(item.topic)) return false
                 seen.add(item.topic)
                 return true
             })
-            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `China search candidates: ${uniqueTerms.length} topics`)
-            for (const item of uniqueTerms) {
-                this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `  candidate: "${item.topic}" => [${item.related.join(', ')}]`)
+            const shuffledTerms = this.bot.utils.shuffleArray(uniqueTerms) as GoogleSearch[]
+            finalTerms = shuffledTerms
+
+            // 按文件顶部 PRINT_CHINA_CANDIDATES 开关决定是否打印本次候选的全部搜索词清单
+            // （各启用渠道 + generateChineseRelatedTerms 后缀），默认不打印
+            if (PRINT_CHINA_CANDIDATES) {
+                this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `China search candidates: ${shuffledTerms.length} topics`)
+                for (const item of shuffledTerms) {
+                    this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `  candidate: "${item.topic}" => [${item.related.join(', ')}]`)
+                }
             }
 
-            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${queryTerms.length} search queries for China region`)
+            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${finalTerms.length} search queries for China region`)
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Error getting China trends: ${error}`, 'warn')
@@ -1614,7 +1627,7 @@ export class Search extends Workers {
             }
         }
 
-        return queryTerms
+        return finalTerms
     }
 
     /**
@@ -1809,11 +1822,12 @@ export class Search extends Workers {
             '双十二'
         ]
 
-        // 将简单的字符串转换为 GoogleSearch 格式
-        return topics.map(topic => ({
+        // 将简单的字符串转换为 GoogleSearch 格式，并打乱顺序避免多账号使用相同搜索内容
+        const fallbackTerms = topics.map(topic => ({
             topic,
             related: this.generateChineseRelatedTerms(topic)
         }))
+        return this.bot.utils.shuffleArray(fallbackTerms) as GoogleSearch[]
     }
 
     private extractJsonFromResponse(text: string): GoogleTrendsResponse[1] | null {
