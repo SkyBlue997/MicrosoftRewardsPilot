@@ -24,4 +24,19 @@ for (const [key, value] of Object.entries(REBROWSER_PATCH_DEFAULTS)) {
     }
 }
 
+/**
+ * rebrowser-playwright 改写的 playwright-core 在“动作与导航竞态、frame 被销毁”时会直接
+ * console.error 一条 "[rebrowser-patches][frames._context] cannot get world" 诊断。
+ * 对应的 Playwright 调用本身会正常 reject，且所有调用方都有 .catch()，因此这只是日志噪音。
+ * 这里只过滤这一条精确前缀，其余 console.error 原样保留。
+ */
+const originalConsoleError = console.error
+console.error = (...args: unknown[]): void => {
+    const first = typeof args[0] === 'string' ? args[0] : ''
+    if (first.startsWith('[rebrowser-patches][frames._context] cannot get world')) {
+        return
+    }
+    originalConsoleError(...args)
+}
+
 export {}

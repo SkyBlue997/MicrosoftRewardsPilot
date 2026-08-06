@@ -3,6 +3,7 @@ import './rebrowser-env'
 
 import cluster from 'cluster'
 import { Page } from 'rebrowser-playwright'
+import ms from 'ms'
 
 import Browser, { ManagedBrowser } from '../browser/Browser'
 import BrowserFunc from '../browser/BrowserFunc'
@@ -123,6 +124,8 @@ export class MicrosoftRewardsBot {
         // Receive the chunk of accounts from the master
         process.on('message', async ({ chunk }) => {
             await this.runTasks(chunk)
+            // Workers always exit so the master's cluster.on('exit') accounting can complete
+            process.exit(0)
         })
     }
 
@@ -254,7 +257,6 @@ export class MicrosoftRewardsBot {
         log('main', 'MAIN-SUMMARY', `❌ Failed accounts: ${failedAccounts}/${accounts.length}`, 'log', failedAccounts > 0 ? 'yellow' : 'green')
         
         log(this.isMobile, 'MAIN-PRIMARY', 'Completed tasks for ALL accounts', 'log', 'green')
-        process.exit()
     }
 
     /**
@@ -572,12 +574,214 @@ async function main() {
     if (cluster.isPrimary) {
         await StartupConfig.initialize()
     }
-    await rewardsBot.initialize()
-    await rewardsBot.run()
+    try {
+        await rewardsBot.initialize()
+        await rewardsBot.run()
+    } catch (error) {
+        log('main', 'MAIN-ERROR', `Error running desktop bot: ${error}`, 'error')
+    }
+}
+
+/** 判断当前环境是否属于中文语言地区（zh / zh-CN / zh-TW / zh-HK / zh-Hant ...）。 */
+function isZhLanguage(): boolean {
+    const candidates = [
+        process.env.LANG || '',
+        process.env.LC_ALL || '',
+        process.env.LC_MESSAGES || '',
+        Intl.DateTimeFormat().resolvedOptions().locale
+    ].filter(Boolean)
+    return candidates.some(locale => /^zh(?=$|[-_])/i.test(locale))
+}
+
+/** 简单双语文案：zh 环境显示中文，其余回退英文。 */
+function t(zh: string, en: string): string {
+    return isZhLanguage() ? zh : en
+}
+
+/**
+ * 每日定时调度器（无第三方依赖，用 setTimeout 实现）。
+ * 配置项 config.json -> scheduler：
+ *   enabled: 是否启用（启用后进程常驻，跑完一次不退出）
+ *   times:   每天执行的时刻列表 "HH:mm"，如 ["06:10", "08:10", ...]
+ *   timezone: 时区，默认 Asia/Shanghai
+ *   runOnStart: 启动时是否立即执行一次，默认 true
+ *   maxShortRunsPerDay: 单日“短执行”累计次数上限，达到后当天剩余时刻跳过
+ *   shortRunThreshold: “短执行”的时长阈值（ms 可解析字符串，如 "5min"），默认 5 分钟
+ * 互锁：到点触发时若上一次执行仍在进行（含启动时的立即执行），则跳过本次触发。
+ */
+function scheduleDailyTask(): (() => Promise<void>) | null {
+    const cfg = loadConfig()
+    const sched = cfg.scheduler
+    if (!sched || sched.enabled === false) {
+        log('main', 'SCHEDULER', t('调度器未启用 - 本次运行结束后进程退出', 'Scheduler disabled - process will exit after the run'), 'warn')
+        return null
+    }
+
+    const times = Array.isArray(sched.times) && sched.times.length > 0
+        ? sched.times
+        : ['06:10', '08:10', '10:10', '12:10', '14:10', '16:10', '18:10', '20:10', '22:10']
+    const timezone = sched.timezone || 'Asia/Shanghai'
+    const maxShortRuns = sched.maxShortRunsPerDay ?? 3
+    let shortRunThreshold = 5 * 60 * 1000 // 默认 5 分钟
+    if (sched.shortRunThreshold) {
+        const parsed = ms(sched.shortRunThreshold)
+        if (parsed) {
+            shortRunThreshold = parsed
+        } else {
+            log('main', 'SCHEDULER', t(`shortRunThreshold "${sched.shortRunThreshold}" 无效，使用默认 5 分钟`, `Invalid shortRunThreshold "${sched.shortRunThreshold}", using default 5min`), 'warn')
+        }
+    }
+
+    let isRunning = false
+    let lastRunDate = ''
+    let shortRunsToday = 0
+    let skipToday = false
+    let timer: NodeJS.Timeout | null = null
+
+    const parseTime = (t: string): { h: number; m: number } | null => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim())
+        if (!m) return null
+        const h = Number(m[1])
+        const min = Number(m[2])
+        if (h < 0 || h > 23 || min < 0 || min > 59) return null
+        return { h, m: min }
+    }
+
+    // 指定时区下的当前 时分 与日期（兼容系统时区不是目标时区的情况）
+    const nowParts = (): { h: number; m: number; s: number; day: string } => {
+        const parts = new Intl.DateTimeFormat('en-GB', {
+            timeZone: timezone,
+            hour12: false,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        }).formatToParts(new Date())
+        const get = (type: string): number => Number(parts.find(p => p.type === type)?.value || '0')
+        const pad = (type: string): string => String(parts.find(p => p.type === type)?.value || '00').padStart(2, '0')
+        return { h: get('hour'), m: get('minute'), s: get('second'), day: `${pad('year')}-${pad('month')}-${pad('day')}` }
+    }
+
+    const nextFireInMs = (): number => {
+        const now = nowParts()
+        const minutes = times
+            .map(parseTime)
+            .filter((t): t is { h: number; m: number } => t !== null)
+            .map(t => t.h * 60 + t.m)
+            .sort((a, b) => a - b)
+        if (minutes.length === 0) {
+            // 配置错误时兜底：1小时后重试
+            log('main', 'SCHEDULER', `No valid times in ${JSON.stringify(times)}, retrying in 1h`, 'warn')
+            return 60 * 60 * 1000
+        }
+        const nowMin = now.h * 60 + now.m
+        const todayNext = minutes.find(m => m > nowMin)
+        const firstMinute = minutes[0]
+        const target = todayNext !== undefined ? todayNext : (firstMinute !== undefined ? firstMinute + 24 * 60 : nowMin + 60)
+        // 精确到秒：目标时刻减当前时刻（含秒），避免定时点晚触发最多近 1 分钟
+        return ((target - nowMin) * 60 - now.s) * 1000
+    }
+
+    /** 今天剩余（尚未到达）的定时点数量。 */
+    const remainingSlotsToday = (): number => {
+        const now = nowParts()
+        const nowMin = now.h * 60 + now.m
+        return times
+            .map(parseTime)
+            .filter((x): x is { h: number; m: number } => x !== null)
+            .filter(x => x.h * 60 + x.m > nowMin)
+            .length
+    }
+
+    const formatDuration = (ms: number): string => {
+        const h = Math.floor(ms / 3600000)
+        const m = Math.floor((ms % 3600000) / 60000)
+        const s = Math.floor((ms % 60000) / 1000)
+        return `${h > 0 ? h + '小时' : ''}${m > 0 ? m + '分' : ''}${s}秒`
+    }
+
+    const run = async (): Promise<void> => {
+        if (isRunning) {
+            log('main', 'SCHEDULER', t('前一个任务仍在执行中，跳过本次执行', 'Previous task still running, skipping this run'), 'warn')
+            return
+        }
+        const today = nowParts().day
+        if (skipToday && lastRunDate === today) {
+            log('main', 'SCHEDULER', t('今日已触发短执行上限，跳过当日后续执行', "Skipping today's remaining runs (short-run limit reached)"), 'warn')
+            return
+        }
+        if (lastRunDate !== today) {
+            lastRunDate = today
+            shortRunsToday = 0
+            skipToday = false
+        }
+
+        isRunning = true
+        const start = Date.now()
+        log('main', 'SCHEDULER', t(`开始执行定时任务，开始时间: ${new Date().toLocaleString()}`, `Scheduled task started at ${new Date().toLocaleString()}`))
+        try {
+            await main()
+        } catch (error) {
+            log('main', 'SCHEDULER-ERROR', t(`定时任务执行失败: ${error}`, `Scheduled task failed: ${error}`), 'error')
+        } finally {
+            isRunning = false
+            const duration = Date.now() - start
+            const remainingSlots = remainingSlotsToday()
+            if (duration < shortRunThreshold) {
+                shortRunsToday++
+                log('main', 'SCHEDULER', t(
+                    `定时任务执行完成，总耗时: ${formatDuration(duration)}；短执行 ${shortRunsToday}/${maxShortRuns} 次，剩余 ${Math.max(0, maxShortRuns - shortRunsToday)} 次触发跳过；今日剩余定时点 ${remainingSlots} 个`,
+                    `Scheduled task finished, duration: ${formatDuration(duration)}; short runs ${shortRunsToday}/${maxShortRuns}, ${Math.max(0, maxShortRuns - shortRunsToday)} left; remaining slots today: ${remainingSlots}`
+                ))
+                if (shortRunsToday >= maxShortRuns) {
+                    skipToday = true
+                    log('main', 'SCHEDULER', t(`短执行累计 ${shortRunsToday}/${maxShortRuns} 次，将跳过今日后续执行`, `Reached ${shortRunsToday}/${maxShortRuns} short runs today - skipping remaining runs`), 'warn')
+                }
+            } else {
+                log('main', 'SCHEDULER', t(
+                    `定时任务执行完成，总耗时: ${formatDuration(duration)}；短执行 ${shortRunsToday}/${maxShortRuns} 次，剩余 ${Math.max(0, maxShortRuns - shortRunsToday)} 次触发跳过；今日剩余定时点 ${remainingSlots} 个`,
+                    `Scheduled task finished, duration: ${formatDuration(duration)}; short runs ${shortRunsToday}/${maxShortRuns}, ${Math.max(0, maxShortRuns - shortRunsToday)} left; remaining slots today: ${remainingSlots}`
+                ))
+            }
+        }
+    }
+
+    const scheduleNext = (): void => {
+        const delay = Math.max(1000, nextFireInMs())
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => {
+            void run().finally(() => scheduleNext())
+        }, delay)
+    }
+
+    log('main', 'SCHEDULER', t(`调度器已启动：每天 ${times.join(', ')}（${timezone}）`, `Scheduler enabled: daily at ${times.join(', ')} (${timezone})`))
+    scheduleNext()
+    return run
+}
+
+async function startApp() {
+    log('main', 'START', t('应用启动', 'App started'))
+    // 先注册定时器再执行首轮任务，避免长任务占用期间错过到点触发；首轮也走同一互锁与统计
+    const runScheduled = scheduleDailyTask()
+    const cfg = loadConfig()
+    const runOnStart = cfg.scheduler?.runOnStart !== false
+    if (runScheduled) {
+        if (runOnStart) {
+            await runScheduled()
+        }
+    } else {
+        // 调度器未启用：保持“跑一次即退出”的原有行为
+        if (runOnStart) {
+            await main()
+        }
+        process.exit(0)
+    }
 }
 
 // Start the bots
-main().catch(error => {
-    log('main', 'MAIN-ERROR', `Error running bots: ${error}`, 'error')
+startApp().catch(error => {
+    log('main', 'START-ERROR', `Error starting app: ${error}`, 'error')
     process.exit(1)
 })

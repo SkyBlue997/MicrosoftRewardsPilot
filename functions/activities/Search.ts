@@ -11,6 +11,10 @@ import {Counters, DashboardData} from '../../interfaces/DashboardData'
 import {GoogleSearch} from '../../interfaces/Search'
 import {AxiosRequestConfig} from 'axios'
 
+// 是否打印中国地区搜索候选词清单（SEARCH-CHINA-CANDIDATES 整体打印开关）
+// 默认 false：不打印搜索词信息；需要排查/核对搜索词时改为 true
+const PRINT_CHINA_CANDIDATES = false
+
 // 扩展 Window 和 Navigator 接口以支持非标准属性
 declare global {
     interface Window {
@@ -1553,6 +1557,7 @@ export class Search extends Workers {
      */
     private async getChinaTrends(): Promise<GoogleSearch[]> {
         const queryTerms: GoogleSearch[] = []
+        let finalTerms: GoogleSearch[] = queryTerms
         const chinaConfig = this.bot.config.searchSettings.chinaRegionAdaptation
 
         // 如果未启用中国地区适配，直接返回备用查询
@@ -1562,6 +1567,14 @@ export class Search extends Workers {
         }
 
         try {
+            // 方案0：使用uapis
+            if (chinaConfig.useUapisTrends) {
+                const uapisTrends = await this.getUapisTrends()
+                if (uapisTrends.length > 0) {
+                    queryTerms.push(...uapisTrends)
+                }
+            }
+
             // 方案1：使用百度热搜榜
             if (chinaConfig.useBaiduTrends) {
                 const baiduTrends = await this.getBaiduTrends()
@@ -1584,7 +1597,27 @@ export class Search extends Workers {
                 queryTerms.push(...fallbackQueries)
             }
 
-            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${queryTerms.length} search queries for China region`)
+            // 去重后生成最终候选清单，并在打印前打乱内部顺序，
+            // 避免本地多个账号使用相同或相近的搜索内容
+            const seen = new Set<string>()
+            const uniqueTerms = queryTerms.filter(item => {
+                if (seen.has(item.topic)) return false
+                seen.add(item.topic)
+                return true
+            })
+            const shuffledTerms = this.bot.utils.shuffleArray(uniqueTerms) as GoogleSearch[]
+            finalTerms = shuffledTerms
+
+            // 按文件顶部 PRINT_CHINA_CANDIDATES 开关决定是否打印本次候选的全部搜索词清单
+            // （各启用渠道 + generateChineseRelatedTerms 后缀），默认不打印
+            if (PRINT_CHINA_CANDIDATES) {
+                this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `China search candidates: ${shuffledTerms.length} topics`)
+                for (const item of shuffledTerms) {
+                    this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-CANDIDATES', `  candidate: "${item.topic}" => [${item.related.join(', ')}]`)
+                }
+            }
+
+            this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Generated ${finalTerms.length} search queries for China region`)
 
         } catch (error) {
             this.bot.log(this.bot.isMobile, 'SEARCH-CHINA-TRENDS', `Error getting China trends: ${error}`, 'warn')
@@ -1592,6 +1625,54 @@ export class Search extends Workers {
             if (chinaConfig.fallbackToLocalQueries) {
                 return this.getChineseFallbackQueries()
             }
+        }
+
+        return finalTerms
+    }
+
+    /**
+     * 获取 uapis 热搜数据（方案0）
+     * 从 https://uapis.cn/api/v1/misc/hotboard 拉取配置的热搜榜 type（为空时使用默认的三个），
+     * 不走代理，直连获取
+     */
+    private async getUapisTrends(): Promise<GoogleSearch[]> {
+        const queryTerms: GoogleSearch[] = []
+        const chinaConfig = this.bot.config.searchSettings.chinaRegionAdaptation
+        const configuredTypes = (chinaConfig?.uapiTypes || [])
+            .map(type => String(type).trim())
+            .filter(Boolean)
+        const types = configuredTypes.length > 0 ? configuredTypes : ['starrail', 'genshin', 'honkai']
+
+        try {
+            for (const type of types) {
+                const request: AxiosRequestConfig = {
+                    url: `https://uapis.cn/api/v1/misc/hotboard?type=${encodeURIComponent(type)}`,
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'application/json, text/plain, */*'
+                    }
+                }
+
+                const response = await this.bot.axios.request(request, false) // 不使用代理
+                if (response.data?.list) {
+                    for (const item of response.data.list) {
+                        // 只存储 title 作为搜索词
+                        if (item.title && item.title.trim()) {
+                            const title = item.title.trim()
+                            queryTerms.push({
+                                topic: title,
+                                related: this.generateChineseRelatedTerms(title)
+                            })
+                        }
+                    }
+                }
+            }
+
+            this.bot.log(this.bot.isMobile, 'UAPIS-TRENDS', `Fetched ${queryTerms.length} trends from UAPIS (types: ${types.join(', ')})`)
+
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'UAPIS-TRENDS', `Error fetching UAPIS trends: ${error}`, 'warn')
         }
 
         return queryTerms
@@ -1691,14 +1772,14 @@ export class Search extends Workers {
      */
     private generateChineseRelatedTerms(baseQuery: string): string[] {
         const patterns = [
-            `${baseQuery} 最新消息`,
-            `${baseQuery} 是什么`,
-            `${baseQuery} 怎么样`,
-            `${baseQuery} 详情`,
-            `${baseQuery} 原因`,
-            `${baseQuery} 结果`,
-            `${baseQuery} 影响`,
-            `${baseQuery} 评论`
+            `${baseQuery}更新`,
+            `${baseQuery}是什么`,
+            `${baseQuery}怎么样`,
+            `${baseQuery}详情`,
+            `${baseQuery}原因`,
+            `${baseQuery}结果`,
+            `${baseQuery}影响`,
+            `${baseQuery}评论`
         ]
 
         // 随机选择3-5个相关词
@@ -1717,25 +1798,8 @@ export class Search extends Workers {
         const topics = [
             // 时事热点
             `${currentYear}年${currentMonth}月新闻`,
-            '今日头条',
-            '热点新闻',
-            '国内新闻',
-            '国际新闻',
-            '财经新闻',
-            '科技新闻',
-            '体育新闻',
-            '娱乐新闻',
-
             // 生活相关
             '天气预报',
-            '美食推荐',
-            '旅游攻略',
-            '健康养生',
-            '购物优惠',
-            '电影推荐',
-            '音乐排行榜',
-            '游戏攻略',
-
             // 科技话题
             '人工智能',
             '5G技术',
@@ -1745,46 +1809,11 @@ export class Search extends Workers {
             '软件推荐',
             '编程教程',
             '区块链',
-
-            // 热门品牌和产品
-            '华为',
-            '小米',
-            'OPPO',
-            'vivo',
-            '比亚迪',
-            '特斯拉',
-            '抖音',
-            '微信',
-            '支付宝',
-            '淘宝',
-            '京东',
-            '拼多多',
-
             // 教育学习
             '考研',
             '高考',
             '英语学习',
             '编程学习',
-            '职业规划',
-            '面试技巧',
-
-            // 投资理财
-            '股票行情',
-            '基金推荐',
-            '理财产品',
-            '房价走势',
-            '黄金价格',
-
-            // 热门话题
-            '减肥方法',
-            '护肤技巧',
-            '穿搭推荐',
-            '家居装修',
-            '宠物养护',
-            '植物种植',
-            '美食制作',
-            '旅游景点',
-
             // 节日相关（根据时间动态调整）
             '春节',
             '中秋节',
@@ -1793,11 +1822,12 @@ export class Search extends Workers {
             '双十二'
         ]
 
-        // 将简单的字符串转换为 GoogleSearch 格式
-        return topics.map(topic => ({
+        // 将简单的字符串转换为 GoogleSearch 格式，并打乱顺序避免多账号使用相同搜索内容
+        const fallbackTerms = topics.map(topic => ({
             topic,
             related: this.generateChineseRelatedTerms(topic)
         }))
+        return this.bot.utils.shuffleArray(fallbackTerms) as GoogleSearch[]
     }
 
     private extractJsonFromResponse(text: string): GoogleTrendsResponse[1] | null {

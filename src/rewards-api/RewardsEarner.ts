@@ -25,6 +25,14 @@ export class RewardsEarner {
         await this.bot.utils.wait(this.bot.utils.randomNumber(6000, 22000))
     }
 
+    /** Read-to-earn pacing: configurable and slower than normal claims (a real reader dwells). */
+    private async readDelay(): Promise<void> {
+        const r = this.bot.config.readToEarn
+        const min = r?.delayMin ? this.bot.utils.stringToMs(r.delayMin) : 25000
+        const max = r?.delayMax ? this.bot.utils.stringToMs(r.delayMax) : 60000
+        await this.bot.utils.wait(this.bot.utils.randomNumber(min, max))
+    }
+
     async run(): Promise<{ claimed: number, pointsGained: number, balance: number }> {
         let data
         try {
@@ -34,7 +42,7 @@ export class RewardsEarner {
             throw error
         }
 
-        this.log(`Balance: ${data.balance} | ${data.promotions.length} promotions | country: ${data.country}`)
+        this.log(`Balance: ${data.balance} | ${data.promotions.length} promotions | region: ${data.country}`)
 
         const claimable = data.promotions.filter(p => RewardsApi.isClaimable(p))
         if (!claimable.length) {
@@ -114,7 +122,7 @@ export class RewardsEarner {
             gained += res.points
             lastBalance = res.balance
             this.log(`📖 Read article ${i + 1}/${maxArticles} (+${res.points})`)
-            await this.humanDelay()
+            await this.readDelay()
         }
         return gained
     }

@@ -133,6 +133,25 @@ services:
   }
 }
 ```
+### 中国大陆热搜词配置
+> 当账户地区为中文（zh-CN/zh-TW/zh-HK 等）且 `chinaRegionAdaptation.enabled=true` 时，搜索词会优先从已启用的 API 渠道拉取真实热搜（uapis / 百度 / 微博），并为每个话题附加 `generateChineseRelatedTerms` 后缀；运行时会把本次候选的全部搜索词清单打印到日志（`SEARCH-CHINA-CANDIDATES`）。
+```json
+{
+  "searchSettings": {
+    "chinaRegionAdaptation": {
+      "enabled": true,
+      "useUapisTrends": true,          // 启用 uapis.cn 热榜
+      "uapiTypes": [],                 // uapis 热搜榜 type 列表；留空/缺失时用默认三个（starrail、genshin、honkai）
+      "useBaiduTrends": true,          // 启用百度热搜
+      "useWeiboTrends": false,         // 启用微博热搜
+      "fallbackToLocalQueries": true   // 数量不足时补充本地备用词
+    }
+  }
+}
+```
+uapis.cn 热榜当前支持的 `type`（来自其官方文档，2026-08 核实）：
+`bilibili` 哔哩哔哩、`acfun` A站、`weibo` 微博热搜、`zhihu` 知乎热榜、`zhihu-daily` 知乎日报、`douyin` 抖音、`xiaohongshu` 小红书、`kuaishou` 快手、`douban-movie` 豆瓣电影、`douban-group` 豆瓣小组、`tieba` 百度贴吧、`hupu` 虎扑、`ngabbs` NGA论坛、`v2ex` V2EX、`52pojie` 吾爱破解、`coolapk` 酷安、`baidu` 百度热搜、`thepaper` 澎湃新闻、`toutiao` 今日头条、`qq-news` 腾讯新闻、`sina` 新浪热搜、`sina-news` 新浪新闻、`netease-news` 网易新闻、`huxiu` 虎嗅、`ifanr` 爱范儿、`sspai` 少数派、`ithome` IT之家、`ithome-xijiayi` IT之家喜加一、`juejin` 掘金、`jianshu` 简书、`guokr` 果壳、`36kr` 36氪、`51cto` 51CTO、`csdn` CSDN、`nodeseek` NodeSeek、`nodeseek-hot` NodeSeek 热门、`hellogithub` HelloGitHub、`lol` 英雄联盟、`genshin` 原神、`honkai` 崩坏3、`starrail` 星穹铁道、`netease-music` 网易云音乐热歌榜、`qq-music` QQ音乐热歌榜、`weread` 微信读书、`weatheralarm` 天气预警、`earthquake` 地震速报、`history` 历史上的今天。
+
 ### 任务配置
 > 其余可领活动（每日任务集、签到、阅读赚取、谜题等）会自动领取，无需开关。
 ```json

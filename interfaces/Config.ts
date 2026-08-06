@@ -20,6 +20,8 @@ export interface Config {
     webhook: ConfigWebhook;
     popupHandling?: ConfigPopupHandling;
     passkeyHandling?: ConfigPasskeyHandling;
+    readToEarn?: ConfigReadToEarn;
+    scheduler?: ConfigScheduler;
 }
 
 export interface ConfigSaveFingerprint {
@@ -79,9 +81,29 @@ export interface ConfigWorkers {
 
 export interface ConfigChinaRegion {
     enabled: boolean;
+    useUapisTrends: boolean;
+    /**
+     * uapis.cn 热搜榜的 type 列表（如 starrail/genshin/honkai/zhihu/bilibili/weibo...）。
+     * 留空或缺失时使用默认的三个（starrail、genshin、honkai）。
+     */
+    uapiTypes?: string[];
     useBaiduTrends: boolean;
     useWeiboTrends: boolean;
     fallbackToLocalQueries: boolean;
+}
+
+export interface ConfigReadToEarn {
+    delayMin: string;
+    delayMax: string;
+}
+
+export interface ConfigScheduler {
+    enabled: boolean;
+    times: string[];
+    timezone?: string;
+    runOnStart?: boolean;
+    maxShortRunsPerDay?: number;
+    shortRunThreshold?: string;
 }
 
 export interface ConfigPopupHandling {
