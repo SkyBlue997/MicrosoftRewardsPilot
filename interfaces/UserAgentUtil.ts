@@ -1,18 +1,11 @@
-// Chrome Product Data
-export interface ChromeVersion {
+// Chrome for Testing: latest Chromium build per milestone (latest-versions-per-milestone.json)
+export interface ChromeMilestoneVersions {
     timestamp: Date;
-    channels: Channels;
+    milestones: Record<string, ChromeMilestone>;
 }
 
-export interface Channels {
-    Stable: Beta;
-    Beta: Beta;
-    Dev: Beta;
-    Canary: Beta;
-}
-
-export interface Beta {
-    channel: string;
+export interface ChromeMilestone {
+    milestone: string;
     version: string;
     revision: string;
 }

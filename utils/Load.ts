@@ -6,6 +6,8 @@ import * as path from 'path'
 
 import { Account } from '../interfaces/Account'
 import { Config, ConfigSaveFingerprint } from '../interfaces/Config'
+import { log } from './Logger'
+import { edgeMajorFromUserAgent, updateFingerprintUserAgent, userAgentRefreshReason } from './UserAgent'
 
 // 缓存管理
 let configCache: Config | null = null
@@ -240,6 +242,31 @@ export async function loadSessionData(sessionPath: string, email: string, isMobi
         if (((saveFingerprint.desktop && !isMobile) || (saveFingerprint.mobile && isMobile)) && fs.existsSync(fingerprintFile)) {
             const fingerprintData = await fs.promises.readFile(fingerprintFile, 'utf-8')
             fingerprint = JSON.parse(fingerprintData)
+
+            // Older builds persisted UAs no real Edge sends (malformed mobile tokens like "; wv" / "; ;",
+            // an un-reduced Edg/EdgA build, a Chromium major different from Edge's). Fingerprints are
+            // reused forever, so repair the UA + userAgentData + sec-ch-ua headers here, keeping the
+            // rest of the device fingerprint (screen, WebGL, fonts...) stable. The original is kept as
+            // a .bak; Browser.createBrowser writes the repaired one back via saveFingerprintData.
+            const savedUserAgent = fingerprint?.fingerprint?.navigator?.userAgent
+            const reason = userAgentRefreshReason(savedUserAgent, isMobile)
+            if (reason) {
+                try {
+                    // Work on a fresh copy so the saved fingerprint is untouched unless we accept the result.
+                    const refreshed: BrowserFingerprintWithHeaders = await updateFingerprintUserAgent(JSON.parse(fingerprintData), isMobile)
+                    const refreshedUserAgent = refreshed.fingerprint.navigator.userAgent
+                    if (edgeMajorFromUserAgent(refreshedUserAgent) < edgeMajorFromUserAgent(savedUserAgent)) {
+                        // Version lookup fell back to the old pinned build — don't "repair" into a downgrade.
+                        log(isMobile, 'LOAD-FINGERPRINT', `Saved User-Agent needs a refresh (${reason}) but only an older version is available right now; keeping it for this run`, 'warn')
+                    } else {
+                        log(isMobile, 'LOAD-FINGERPRINT', `Refreshing saved User-Agent (${reason}): "${savedUserAgent}" → "${refreshedUserAgent}"`, 'warn')
+                        await fs.promises.copyFile(fingerprintFile, `${fingerprintFile}.bak`)
+                        fingerprint = refreshed
+                    }
+                } catch (error) {
+                    log(isMobile, 'LOAD-FINGERPRINT', `Could not refresh saved User-Agent (${reason}); keeping it for this run: ${error}`, 'warn')
+                }
+            }
         }
 
         return {
