@@ -85,7 +85,7 @@ echo - Session data will be saved automatically upon completion
 echo.
 pause
 
-npx tsx src/manual-2fa-helper.ts
+call npm run login
 goto end
 
 :option2

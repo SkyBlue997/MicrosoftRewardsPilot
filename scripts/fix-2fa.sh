@@ -72,7 +72,7 @@ case $choice in
         echo ""
         read -p "按 Enter 键继续 / Press Enter to continue..."
         
-        npx tsx src/manual-2fa-helper.ts
+        npm run login
         ;;
     2)
         echo ""

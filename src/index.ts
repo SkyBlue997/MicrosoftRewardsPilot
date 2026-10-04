@@ -576,8 +576,11 @@ async function main() {
     await rewardsBot.run()
 }
 
-// Start the bots
-main().catch(error => {
-    log('main', 'MAIN-ERROR', `Error running bots: ${error}`, 'error')
-    process.exit(1)
-})
+// Start the bots — only when run as the entry point (npm start / ts-start / cluster workers). Importing
+// the class (e.g. from src/helpers/manual-2fa-helper.ts) must not kick off a full run.
+if (require.main === module) {
+    main().catch(error => {
+        log('main', 'MAIN-ERROR', `Error running bots: ${error}`, 'error')
+        process.exit(1)
+    })
+}

@@ -1,656 +1,350 @@
-import { chromium, Page } from 'rebrowser-playwright'
+// MUST be first: arms the rebrowser anti-detection patches before rebrowser-playwright is loaded.
+import '../rebrowser-env'
+
 import * as readline from 'readline'
-import { getUserAgent } from '../../utils/UserAgent'
+import { Page } from 'rebrowser-playwright'
+
+import { MicrosoftRewardsBot } from '../index'
+import { RewardsApi } from '../rewards-api/RewardsApi'
+import Browser, { ManagedBrowser } from '../../browser/Browser'
+import { Login } from '../../functions/Login'
+import Axios from '../../utils/Axios'
+import { loadAccounts, loadConfig, saveSessionData } from '../../utils/Load'
+
+import { Account } from '../../interfaces/Account'
 
 /**
- * 移动端2FA验证辅助工具
- * 专门用于解决移动端Microsoft Rewards登录时的双因素认证问题
+ * Interactive sign-in for one account (2FA / passkey / consent the bot can't get past headlessly).
  *
- * 特点：
- * - 自动使用最新版本的移动端User-Agent
- * - 只处理移动端会话数据
- * - 保存到标准会话目录 src/sessions/[email]/
- * - 支持中英文界面
- * - 自动禁用FIDO/Passkey提示
+ * Every scheduled run re-derives its dapi access token from the SAVED browser session
+ * (sessions/<email>/{desktop,mobile}_cookies.json + fingerprint): createBrowser → Login.login →
+ * Login.getMobileAccessToken. If Microsoft demands 2FA, that headless run can't finish. This tool runs
+ * the exact same classes in a VISIBLE window so the human can complete whatever the automation
+ * can't, then proves the result by minting the OAuth token and reading the dapi balance — the same
+ * steps the cron run will take — before saving the session.
+ *
+ * Because it goes through Browser.createBrowser, the session is created with the account's proxy,
+ * geo/locale and the persisted fingerprint the bot will reuse (a session made in a hand-rolled
+ * browser with a different UA/fingerprint is what the previous version of this helper produced).
+ *
+ * Usage:  npm run login [-- --email <addr>] [-- --desktop | --mobile]
+ * Run it on a machine with a display. Docker deployments mount ./sessions, so run it on the host and
+ * the container picks the new session up on its next run.
  */
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-})
+// Human-paced steps (reading an SMS, approving on the phone) need far longer than the unattended
+// defaults (3 min). Login reads these at call time; an explicit env value still wins.
+const INTERACTIVE_WAIT_MS = 10 * 60_000
+process.env.LOGIN_MAX_WAIT_MS ??= String(INTERACTIVE_WAIT_MS)
+process.env.MOBILE_OAUTH_TIMEOUT_MS ??= String(INTERACTIVE_WAIT_MS)
 
-// 多语言支持
-type Language = 'zh' | 'en'
-
-interface LanguageStrings {
-    title: string
-    subtitle: string
-    description: string
-    selectLanguage: string
-    languageOptions: string
-    invalidLanguage: string
-    enterEmail: string
-    enterPassword: string
-    startingBrowser: string
-    mobileMode: string
-    userAgent: string
-    screenSize: string
-    loginFlow: string
-    navigateToLogin: string
-    pageLoaded: string
-    waitForEmail: string
-    emailFilled: string
-    clickedNext: string
-    emailStepManual: string
-    completeEmailStep: string
-    passwordFilled: string
-    clickedLogin: string
-    passwordStepManual: string
-    completePasswordStep: string
-    twoFactorStep: string
-    twoFactorOptions: string
-    smsCode: string
-    emailCode: string
-    authenticatorApp: string
-    passkey: string
-    detecting2FA: string
-    instruction1: string
-    instruction2: string
-    instruction3: string
-    instruction4: string
-    instruction5: string
-    complete2FA: string
-    checking2FA: string
-    twoFactorPassed: string
-    twoFactorUncertain: string
-    continueIf2FA: string
-    oauthStep: string
-    navigateToOAuth: string
-    checkOAuth: string
-    waitingOAuth: string
-    oauthSuccess: string
-    authCode: string
-    verificationComplete: string
-    completionMessage: string
-    accountReady: string
-    sessionReady: string
-    cookieCount: string
-    sessionSaved: string
-    mobileSession: string
-    sessionDir: string
-    successMessage: string
-    notes: string
-    note1: string
-    note2: string
-    note3: string
-    saveError: string
-    manualSave: string
-    sessionData: string
-    oauthTimeout: string
-    checkPageStatus: string
-    detected: string
-    pressAnyKey: string
-    programEnd: string
-    programError: string
-    loginError: string
+interface Options {
+    email?: string
+    desktop: boolean
+    mobile: boolean
+    // Mode flags were given explicitly (so config.workers.doMobileSearch doesn't override them)
+    explicitModes: boolean
 }
 
-const translations: Record<Language, LanguageStrings> = {
-    zh: {
-        title: 'Microsoft Rewards 移动端2FA验证助手',
-        subtitle: '=====================================',
-        description: '此工具专门用于处理移动端登录时的双因素认证问题\n完成验证后，移动端任务将能正常运行而无需2FA验证',
-        selectLanguage: '请选择语言 / Please select language:',
-        languageOptions: '1. 中文\n2. English',
-        invalidLanguage: '无效选择，默认使用中文',
-        enterEmail: '请输入需要验证的邮箱地址: ',
-        enterPassword: '请输入密码: ',
-        startingBrowser: '\n开始浏览器会话...',
-        mobileMode: '📱 已启动移动端浏览器模式',
-        userAgent: '🔍 User-Agent: 移动端 (Android)',
-        screenSize: '📐 屏幕尺寸: 412x915 (移动端)',
-        loginFlow: '\n=== 开始登录流程 ===',
-        navigateToLogin: '1. 导航到Microsoft登录页面...',
-        pageLoaded: '2. 等待页面加载完成...',
-        waitForEmail: '页面已加载，按Enter继续到邮箱输入步骤...',
-        emailFilled: '3. 邮箱已填入，查找提交按钮...',
-        clickedNext: '4. 已点击"下一步"按钮',
-        emailStepManual: '邮箱输入步骤可能需要手动处理',
-        completeEmailStep: '如果需要，请手动完成邮箱输入步骤，然后按Enter继续...',
-        passwordFilled: '5. 密码已填入，查找提交按钮...',
-        clickedLogin: '6. 已点击"登录"按钮',
-        passwordStepManual: '密码输入步骤可能需要手动处理',
-        completePasswordStep: '如果需要，请手动完成密码输入步骤，然后按Enter继续...',
-        twoFactorStep: '\n=== 2FA处理步骤 ===',
-        twoFactorOptions: '现在可能会出现以下2FA选项：',
-        smsCode: '- SMS验证码',
-        emailCode: '- 邮箱验证码',
-        authenticatorApp: '- Authenticator应用',
-        passkey: '- Passkey/生物识别',
-        detecting2FA: '正在检测2FA方法...',
-        instruction1: '1. 如果看到SMS验证码输入框，请输入收到的验证码',
-        instruction2: '2. 如果看到邮箱验证码输入框，请检查邮箱并输入验证码',
-        instruction3: '3. 如果看到Authenticator号码，请在手机应用中按对应数字',
-        instruction4: '4. 如果看到Passkey选项，您可以选择跳过或使用',
-        instruction5: '5. 如果需要选择其他验证方法，请点击相应按钮',
-        complete2FA: '\n请完成2FA验证步骤，完成后按Enter继续...',
-        checking2FA: '检查2FA状态...',
-        twoFactorPassed: '✅ 2FA验证似乎已通过',
-        twoFactorUncertain: '⚠️ 2FA状态不确定，请检查页面',
-        continueIf2FA: '如果2FA还没完成，请继续处理，然后按Enter...',
-        oauthStep: '\n=== OAuth授权步骤 ===',
-        navigateToOAuth: '7. 导航到OAuth授权页面...',
-        checkOAuth: '请检查页面是否需要额外的授权步骤，完成后按Enter继续...',
-        waitingOAuth: '8. 等待OAuth授权完成...',
-        oauthSuccess: '✅ OAuth授权成功!',
-        authCode: '授权码: ',
-        verificationComplete: '\n=== 验证完成 ===',
-        completionMessage: '✅ 2FA验证和OAuth授权已成功完成\n您的账户现在应该可以正常使用自动化程序了',
-        accountReady: '您的账户现在应该可以正常使用自动化程序了',
-        sessionReady: '\n会话数据已准备好，您可以将其保存到sessions目录中',
-        cookieCount: '会话Cookie数量: ',
-        sessionSaved: '💾 移动端会话数据已自动保存!',
-        mobileSession: '📄 移动端cookies: ',
-        sessionDir: '📁 会话目录: ',
-        successMessage: '🚀 移动端会话数据已保存，您现在可以运行自动化程序了',
-        notes: '📋 注意：',
-        note1: '   - 已保存移动端cookies到标准位置',
-        note2: '   - 移动端任务现在应该能跳过2FA验证',
-        note3: '   - 如果需要桌面端会话，程序会在首次运行时自动创建',
-        saveError: '❌ 自动保存失败: ',
-        manualSave: '请手动保存会话数据',
-        sessionData: '会话数据:',
-        oauthTimeout: '\n❌ OAuth授权未完成或超时',
-        checkPageStatus: '请检查页面状态，可能需要手动完成某些步骤',
-        detected: '✓ 检测到: ',
-        pressAnyKey: '\n按任意键关闭浏览器...',
-        programEnd: '\n程序结束',
-        programError: '程序出错: ',
-        loginError: '登录过程中出现错误: '
-    },
-    en: {
-        title: 'Microsoft Rewards Mobile 2FA Verification Assistant',
-        subtitle: '=====================================================',
-        description: 'This tool is designed to handle two-factor authentication issues during mobile login\nAfter verification, mobile tasks will run normally without 2FA prompts',
-        selectLanguage: 'Please select language / 请选择语言:',
-        languageOptions: '1. 中文\n2. English',
-        invalidLanguage: 'Invalid selection, using Chinese by default',
-        enterEmail: 'Enter the email address to verify: ',
-        enterPassword: 'Enter password: ',
-        startingBrowser: '\nStarting browser session...',
-        mobileMode: '📱 Mobile browser mode activated',
-        userAgent: '🔍 User-Agent: Mobile (Android)',
-        screenSize: '📐 Screen size: 412x915 (Mobile)',
-        loginFlow: '\n=== Login Process ===',
-        navigateToLogin: '1. Navigating to Microsoft login page...',
-        pageLoaded: '2. Waiting for page to load...',
-        waitForEmail: 'Page loaded, press Enter to continue to email input step...',
-        emailFilled: '3. Email filled, looking for submit button...',
-        clickedNext: '4. Clicked "Next" button',
-        emailStepManual: 'Email input step may require manual handling',
-        completeEmailStep: 'If needed, manually complete the email input step, then press Enter to continue...',
-        passwordFilled: '5. Password filled, looking for submit button...',
-        clickedLogin: '6. Clicked "Login" button',
-        passwordStepManual: 'Password input step may require manual handling',
-        completePasswordStep: 'If needed, manually complete the password input step, then press Enter to continue...',
-        twoFactorStep: '\n=== 2FA Processing ===',
-        twoFactorOptions: 'The following 2FA options may appear:',
-        smsCode: '- SMS verification code',
-        emailCode: '- Email verification code',
-        authenticatorApp: '- Authenticator app',
-        passkey: '- Passkey/Biometric',
-        detecting2FA: 'Detecting 2FA methods...',
-        instruction1: '1. If you see SMS verification code input, enter the received code',
-        instruction2: '2. If you see email verification code input, check your email and enter the code',
-        instruction3: '3. If you see Authenticator number, press the corresponding number in your mobile app',
-        instruction4: '4. If you see Passkey option, you can choose to skip or use it',
-        instruction5: '5. If you need to select other verification methods, click the appropriate button',
-        complete2FA: '\nPlease complete the 2FA verification steps, then press Enter to continue...',
-        checking2FA: 'Checking 2FA status...',
-        twoFactorPassed: '✅ 2FA verification seems to have passed',
-        twoFactorUncertain: '⚠️ 2FA status uncertain, please check the page',
-        continueIf2FA: 'If 2FA is not complete, please continue processing, then press Enter...',
-        oauthStep: '\n=== OAuth Authorization ===',
-        navigateToOAuth: '7. Navigating to OAuth authorization page...',
-        checkOAuth: 'Please check if the page requires additional authorization steps, then press Enter to continue...',
-        waitingOAuth: '8. Waiting for OAuth authorization to complete...',
-        oauthSuccess: '✅ OAuth authorization successful!',
-        authCode: 'Authorization code: ',
-        verificationComplete: '\n=== Verification Complete ===',
-        completionMessage: '✅ 2FA verification and OAuth authorization completed successfully\nYour account should now work normally with the automation program',
-        accountReady: 'Your account should now work normally with the automation program',
-        sessionReady: '\nSession data is ready and can be saved to the sessions directory',
-        cookieCount: 'Session cookie count: ',
-        sessionSaved: '💾 Mobile session data automatically saved!',
-        mobileSession: '📄 Mobile cookies: ',
-        sessionDir: '📁 Session directory: ',
-        successMessage: '🚀 Mobile session data saved, you can now run the automation program',
-        notes: '📋 Notes:',
-        note1: '   - Mobile cookies saved to standard location',
-        note2: '   - Mobile tasks should now skip 2FA verification',
-        note3: '   - Desktop session will be created automatically on first run if needed',
-        saveError: '❌ Auto-save failed: ',
-        manualSave: 'Please manually save session data',
-        sessionData: 'Session data:',
-        oauthTimeout: '\n❌ OAuth authorization not completed or timed out',
-        checkPageStatus: 'Please check page status, manual completion may be required',
-        detected: '✓ Detected: ',
-        pressAnyKey: '\nPress any key to close browser...',
-        programEnd: '\nProgram ended',
-        programError: 'Program error: ',
-        loginError: 'Error during login process: '
-    }
+interface ModeResult {
+    label: string
+    ok: boolean
+    detail: string
 }
 
-class Manual2FAHelper {
-    private language: Language = 'zh'
-    private strings: LanguageStrings
+function printUsage(): void {
+    console.log([
+        'Usage: npm run login -- [--email <addr>] [--desktop | --mobile]',
+        '  --email <addr>  账户（默认：accounts.json 只有一个时自动选择，否则询问）/ account to sign in',
+        '  --desktop       只登录桌面端会话 / desktop session only',
+        '  --mobile        只登录移动端会话 / mobile session only',
+        '  (默认两者都登录 / default: both)'
+    ].join('\n'))
+}
 
-    constructor() {
-        this.strings = translations['zh'] // 默认中文
-        this.loadAccounts()
-    }
+function parseArgs(argv: string[]): Options {
+    let email: string | undefined
+    let onlyDesktop = false
+    let onlyMobile = false
 
-    private loadAccounts() {
-        // 这里可以从配置文件读取账户信息
-        // 或者让用户手动输入
-        console.log('移动端2FA验证辅助工具')
-        console.log('========================')
-        console.log('专门解决移动端登录2FA问题')
-    }
-
-    async selectLanguage(): Promise<void> {
-        console.log('\n' + this.strings.selectLanguage)
-        console.log(this.strings.languageOptions)
-        
-        const choice = await this.askQuestion('\n请输入选项 / Enter option (1-2): ')
-        
-        switch (choice.trim()) {
-            case '1':
-                this.language = 'zh'
-                break
-            case '2':
-                this.language = 'en'
-                break
-            default:
-                console.log(this.strings.invalidLanguage)
-                this.language = 'zh'
-                break
-        }
-        
-        this.strings = translations[this.language]
-        console.log('')
-    }
-
-    async startManualVerification() {
-        await this.selectLanguage()
-        
-        console.log(this.strings.title)
-        console.log(this.strings.subtitle)
-        console.log(this.strings.description)
-        console.log('')
-        
-        const email = await this.askQuestion(this.strings.enterEmail)
-        const password = await this.askQuestion(this.strings.enterPassword)
-
-        console.log(this.strings.startingBrowser)
-        
-        const browser = await chromium.launch({
-            headless: false, // 显示浏览器界面
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled'
-            ]
-        })
-
-        // 获取最新的移动端User-Agent
-        const userAgentData = await getUserAgent(true)
-
-        const context = await browser.newContext({
-            userAgent: userAgentData.userAgent,
-            viewport: { width: 412, height: 915 }, // 模拟移动端屏幕尺寸
-            deviceScaleFactor: 3, // 高分辨率移动设备
-            isMobile: true, // 标识为移动设备
-            hasTouch: true, // 启用触摸支持
-            locale: 'en-US'
-        })
-
-        const page = await context.newPage()
-
-        console.log(this.strings.mobileMode)
-        console.log(`🔍 User-Agent: ${userAgentData.userAgent}`)
-        console.log(this.strings.screenSize)
-
-        try {
-            await this.performManualLogin(page, email, password)
-        } catch (error) {
-            console.error(this.strings.loginError, error)
-        } finally {
-            console.log(this.strings.pressAnyKey)
-            await this.askQuestion('')
-            await browser.close()
-            rl.close()
-        }
-    }
-
-    private async performManualLogin(page: Page, email: string, password: string) {
-        console.log(this.strings.loginFlow)
-
-        // 禁用FIDO/Passkey提示，减少Passkey弹窗干扰
-        await page.route('**/GetCredentialType.srf*', (route: any) => {
-            const postData = route.request().postData()
-            if (postData) {
-                try {
-                    const body = JSON.parse(postData)
-                    body.isFidoSupported = false
-                    route.continue({ postData: JSON.stringify(body) })
-                } catch {
-                    route.continue()
-                }
-            } else {
-                route.continue()
-            }
-        })
-
-        // 1. 导航到登录页面
-        console.log(this.strings.navigateToLogin)
-        await page.goto('https://www.bing.com/rewards/dashboard')
-        await page.waitForLoadState('domcontentloaded')
-
-        console.log(this.strings.pageLoaded)
-        await this.waitForUser(this.strings.waitForEmail)
-
-        // 2. 输入邮箱
-        try {
-            const emailField = await page.waitForSelector('input[type="email"]', { timeout: 10000 })
-            if (emailField) {
-                await emailField.fill(email)
-                console.log(this.strings.emailFilled)
-                
-                const nextButton = await page.waitForSelector('button[type="submit"]', { timeout: 5000 })
-                if (nextButton) {
-                    await nextButton.click()
-                    console.log(this.strings.clickedNext)
-                }
-            }
-        } catch (error) {
-            console.log(this.strings.emailStepManual)
-        }
-
-        await this.waitForUser(this.strings.completeEmailStep)
-
-        // 3. 输入密码
-        try {
-            const passwordField = await page.waitForSelector('input[type="password"]', { timeout: 10000 })
-            if (passwordField) {
-                await passwordField.fill(password)
-                console.log(this.strings.passwordFilled)
-                
-                const nextButton = await page.waitForSelector('button[type="submit"]', { timeout: 5000 })
-                if (nextButton) {
-                    await nextButton.click()
-                    console.log(this.strings.clickedLogin)
-                }
-            }
-        } catch (error) {
-            console.log(this.strings.passwordStepManual)
-        }
-
-        await this.waitForUser(this.strings.completePasswordStep)
-
-        // 4. 处理2FA
-        console.log(this.strings.twoFactorStep)
-        console.log(this.strings.twoFactorOptions)
-        console.log(this.strings.smsCode)
-        console.log(this.strings.emailCode)
-        console.log(this.strings.authenticatorApp)
-        console.log(this.strings.passkey)
-        console.log('')
-
-        await this.handle2FAManually(page)
-
-        // 5. 检查OAuth授权
-        console.log(this.strings.oauthStep)
-        
-        // 导航到OAuth授权页面
-        const clientId = '0000000040170455'
-        const redirectUrl = 'https://login.live.com/oauth20_desktop.srf'
-        const scope = 'service::prod.rewardsplatform.microsoft.com::MBI_SSL'
-        
-        const authorizeUrl = `https://login.live.com/oauth20_authorize.srf?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUrl)}&scope=${encodeURIComponent(scope)}&state=test&access_type=offline_access&login_hint=${encodeURIComponent(email)}`
-        
-        console.log(this.strings.navigateToOAuth)
-        await page.goto(authorizeUrl)
-        
-        await this.waitForUser(this.strings.checkOAuth)
-
-        // 6. 等待授权完成
-        console.log(this.strings.waitingOAuth)
-
-        let authorizationCode = ''
-        const startTime = Date.now()
-        // 支持环境变量配置超时时间，默认5分钟
-        const timeout = Number(process.env.OAUTH_MAX_WAIT_MS || 300000)
-        const timeoutMinutes = Math.round(timeout / 60000)
-        console.log(`⏱️ OAuth timeout: ${timeoutMinutes} minutes (可通过 OAUTH_MAX_WAIT_MS 环境变量配置)`)
-
-        while (Date.now() - startTime < timeout) {
-            const currentUrl = page.url()
-            if (currentUrl.includes('oauth20_desktop.srf') && currentUrl.includes('code=')) {
-                const url = new URL(currentUrl)
-                authorizationCode = url.searchParams.get('code') || ''
-                if (authorizationCode) {
-                    const authDuration = Date.now() - startTime
-                    console.log(this.strings.oauthSuccess)
-                    console.log(`${this.strings.authCode}${authorizationCode.substring(0, 20)}...`)
-                    console.log(`⏱️ Authorization completed in ${Math.round(authDuration / 1000)}s`)
-                    break
-                }
-            }
-            await page.waitForTimeout(2000)
-        }
-
-        if (authorizationCode) {
-            console.log(this.strings.verificationComplete)
-            console.log(this.strings.completionMessage)
-            
-            // 保存会话数据
-            const cookies = await page.context().cookies()
-            const sessionData = {
-                cookies: cookies,
-                timestamp: new Date().toISOString(),
-                email: email
-            }
-            
-            console.log(this.strings.sessionReady)
-            console.log(`${this.strings.cookieCount}${cookies.length}`)
-            
-            // 自动保存会话数据
-            try {
-                const fs = await import('fs')
-                const path = await import('path')
-                
-                // 使用项目标准的会话保存路径 - sessions/[email]/
-                const projectRoot = process.cwd()
-                const sessionDir = path.join(projectRoot, 'sessions', email)
-                
-                // 确保会话目录存在
-                if (!fs.existsSync(sessionDir)) {
-                    fs.mkdirSync(sessionDir, { recursive: true })
-                    console.log(`📁 ${this.language === 'zh' ? '创建会话目录' : 'Created session directory'}: ${sessionDir}`)
-                }
-                
-                // 只保存移动端cookies（因为只有移动端需要2FA验证）
-                const mobileCookiesPath = path.join(sessionDir, 'mobile_cookies.json')
-                fs.writeFileSync(mobileCookiesPath, JSON.stringify(cookies, null, 2))
-                
-                console.log(this.strings.sessionSaved)
-                console.log(`${this.strings.mobileSession}${mobileCookiesPath}`)
-                console.log(`${this.strings.sessionDir}${sessionDir}`)
-                
-                console.log(this.strings.successMessage)
-                console.log(this.strings.notes)
-                console.log(this.strings.note1)
-                console.log(this.strings.note2)
-                console.log(this.strings.note3)
-                
-            } catch (saveError) {
-                console.error(this.strings.saveError, saveError)
-                console.log(this.strings.manualSave)
-                console.log(this.strings.sessionData)
-                console.log(JSON.stringify(sessionData, null, 2))
-            }
+    for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i] as string
+        if (arg === '--email' || arg === '-e') {
+            email = argv[++i]
+        } else if (arg.startsWith('--email=')) {
+            email = arg.slice('--email='.length)
+        } else if (arg === '--desktop') {
+            onlyDesktop = true
+        } else if (arg === '--mobile') {
+            onlyMobile = true
+        } else if (arg === '-dev') {
+            // consumed by loadAccounts() (selects accounts.dev.json)
+        } else if (arg === '--help' || arg === '-h') {
+            printUsage()
+            process.exit(0)
         } else {
-            console.log(this.strings.oauthTimeout)
-            console.log(this.strings.checkPageStatus)
+            console.error(`未知参数 / Unknown argument: ${arg}`)
+            printUsage()
+            process.exit(1)
         }
     }
 
-    /**
-     * 尝试自动关闭Passkey提示（轻量级，专门用于OAuth流程）
-     * 基于Login.ts的实现
-     */
-    private async tryDismissPasskey(page: Page): Promise<void> {
-        const passkeySelectors = [
-            // 5层检测策略
-            '#iLooksGood',                           // Layer 1: "Looks good" button
-            '#iCancel',                             // Layer 2: Cancel button
-            'input[id="KmsiCheckboxField"]',        // Layer 3: KMSI checkbox
-            '#acceptButton',                        // Layer 4: Accept button
-            'div[data-value="Fido"]'               // Layer 5: Fido option
-        ]
-
-        for (const selector of passkeySelectors) {
-            try {
-                const element = await page.waitForSelector(selector, { timeout: 500, state: 'visible' })
-                if (element) {
-                    // 针对KMSI checkbox的特殊处理
-                    if (selector === 'input[id="KmsiCheckboxField"]') {
-                        const isChecked = await element.isChecked()
-                        if (!isChecked) {
-                            await element.check({ timeout: 1000 })
-                        }
-                        // 检查后查找提交按钮
-                        const submitBtn = await page.waitForSelector('input[type="submit"]', { timeout: 1000, state: 'visible' })
-                        if (submitBtn) {
-                            await submitBtn.click({ timeout: 1000 })
-                            console.log('✓ Auto-dismissed KMSI prompt')
-                        }
-                    } else if (selector === 'div[data-value="Fido"]') {
-                        // 如果检测到Fido选项，尝试点击"Use a different method"
-                        const altMethodBtn = await page.waitForSelector('#signInAnotherWay', { timeout: 500, state: 'visible' })
-                        if (altMethodBtn) {
-                            await altMethodBtn.click({ timeout: 1000 })
-                            console.log('✓ Clicked alternative method to skip Passkey')
-                        }
-                    } else {
-                        await element.click({ timeout: 1000 })
-                        console.log(`✓ Auto-dismissed Passkey prompt using: ${selector}`)
-                    }
-                    await page.waitForTimeout(500)
-                }
-            } catch {
-                // 该选择器未找到，继续下一个
-            }
-        }
-    }
-
-    private async handle2FAManually(page: Page) {
-        console.log(this.strings.detecting2FA)
-
-        // 首先尝试自动关闭Passkey提示
-        await this.tryDismissPasskey(page)
-
-        // 检查常见的2FA元素（扩展版本，与Login.ts保持一致）
-        const checks = [
-            { name: 'SMS验证码输入框', selector: 'input[name="otc"]' },
-            { name: '邮箱验证码输入框', selector: 'input[name="proofconfirmation"]' },
-            { name: 'Authenticator显示号码', selector: '#displaySign' },
-            { name: 'Authenticator应用', selector: '#idSpan_SAOTCAS_DescriptionText' },
-            { name: 'Passkey页面', selector: '[data-testid="biometricVideo"]' },
-            { name: 'Passkey选项', selector: 'div[data-value="Fido"]' },
-            { name: '保持登录(KMSI)', selector: '#KmsiCheckboxField' },
-            { name: '其他验证方法按钮', selector: 'button:has-text("Use a different method")' },
-            { name: '其他验证方法(备选)', selector: '#signInAnotherWay' }
-        ]
-
-        for (const check of checks) {
-            try {
-                const element = await page.waitForSelector(check.selector, { timeout: 2000 })
-                if (element && await element.isVisible()) {
-                    console.log(`${this.strings.detected}${check.name}`)
-                }
-            } catch {
-                // 元素不存在，继续检查下一个
-            }
-        }
-
-        console.log(`\n${this.strings.twoFactorOptions}`)
-        console.log(this.strings.instruction1)
-        console.log(this.strings.instruction2)
-        console.log(this.strings.instruction3)
-        console.log(this.strings.instruction4)
-        console.log(this.strings.instruction5)
-
-        await this.waitForUser(this.strings.complete2FA)
-
-        // 多次检查是否已经通过2FA
-        let passed = false
-        for (let i = 0; i < 10; i++) {
-            try {
-                // 检查是否已经到达OAuth页面或Rewards页面
-                const currentUrl = page.url()
-                if (currentUrl.includes('oauth20_authorize') || 
-                    currentUrl.includes('rewards.bing.com') ||
-                    await page.waitForSelector('html[data-role-name="RewardsPortal"]', { timeout: 2000 })) {
-                    passed = true
-                    break
-                }
-            } catch {
-                // 继续等待
-            }
-            
-            console.log(`${this.strings.checking2FA} (${i + 1}/10)`)
-            await page.waitForTimeout(3000)
-        }
-
-        if (passed) {
-            console.log(this.strings.twoFactorPassed)
-        } else {
-            console.log(this.strings.twoFactorUncertain)
-            await this.waitForUser(this.strings.continueIf2FA)
-        }
-    }
-
-    private async waitForUser(message: string): Promise<void> {
-        return new Promise((resolve) => {
-            rl.question(message, () => {
-                resolve()
-            })
-        })
-    }
-
-    private async askQuestion(question: string): Promise<string> {
-        return new Promise((resolve) => {
-            rl.question(question, (answer) => {
-                resolve(answer)
-            })
-        })
-    }
-}
-
-// 如果直接运行此文件
-if (require.main === module) {
-    const helper = new Manual2FAHelper()
-    
-    helper.startManualVerification().then(() => {
-        console.log('\n程序结束 / Program ended')
-        process.exit(0)
-    }).catch((error) => {
-        console.error('程序出错 / Program error:', error)
+    if (argv.some(a => a === '--email' || a === '-e') && !email) {
+        console.error('--email 需要一个邮箱 / --email needs an address')
         process.exit(1)
+    }
+
+    // Neither or both flags → both sessions
+    const both = onlyDesktop === onlyMobile
+    return { email, desktop: both || onlyDesktop, mobile: both || onlyMobile, explicitModes: !both }
+}
+
+/** One-shot prompt. Login.promptForInput opens its own readline for SMS codes, so never hold one open. */
+function ask(question: string): Promise<string> {
+    return new Promise(resolve => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        rl.question(question, answer => {
+            resolve(answer.trim())
+            rl.close()
+        })
+        // stdin closed (Ctrl+D / non-interactive) — answer empty instead of hanging forever
+        rl.once('close', () => resolve(''))
     })
 }
 
-export default Manual2FAHelper 
+/** Wait for Enter, but also move on when `until` settles or after timeoutMs (the terminal may not take input). */
+function enterOr(question: string, until: Promise<unknown>, timeoutMs: number): Promise<void> {
+    return new Promise(resolve => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        const finish = (): void => {
+            clearTimeout(timer)
+            rl.close()
+            resolve()
+        }
+        const timer = setTimeout(finish, timeoutMs)
+        rl.question(question, finish)
+        rl.once('close', finish)
+        until.then(finish, finish)
+    })
+}
+
+async function pickAccount(accounts: Account[], email?: string): Promise<Account> {
+    if (!accounts.length) {
+        throw new Error('config/accounts.json 中没有账户 / no accounts in config/accounts.json')
+    }
+    if (email) {
+        const match = accounts.find(a => a.email.toLowerCase() === email.toLowerCase())
+        if (!match) throw new Error(`accounts.json 中找不到 / not found in accounts.json: ${email}`)
+        return match
+    }
+    if (accounts.length === 1) return accounts[0] as Account
+
+    console.log('\n选择账户 / Choose an account:')
+    accounts.forEach((a, i) => console.log(`  ${i + 1}. ${a.email}`))
+    const choice = Number(await ask(`(1-${accounts.length}): `))
+    const picked = Number.isInteger(choice) ? accounts[choice - 1] : undefined
+    if (!picked) throw new Error('无效选择 / invalid choice')
+    return picked
+}
+
+const SIGN_IN_HOSTS = ['login.live.com', 'login.microsoftonline.com', 'account.live.com']
+
+function onSignInPage(page: Page): boolean {
+    try {
+        const host = new URL(page.url()).hostname
+        return SIGN_IN_HOSTS.some(h => host === h || host.endsWith(`.${h}`))
+    } catch {
+        return false
+    }
+}
+
+/** Origin + path only — sign-in URLs carry kilobytes of state/nonce that only bury the useful part. */
+function shortUrl(url: string): string {
+    try {
+        const u = new URL(url)
+        return `${u.origin}${u.pathname}`
+    } catch {
+        return url
+    }
+}
+
+/**
+ * Resolves when the human is probably done: the window LEAVES Microsoft's sign-in pages (the flow
+ * finished and redirected back), or — when there is a keyboard — they press Enter. Purely passive:
+ * it never navigates, so it can't yank the page away in the middle of a 2FA step. Enter is optional
+ * because the terminal may not take input (e.g. a read-only output panel).
+ */
+function waitUntilDone(page: Page, deadline: number): Promise<void> {
+    return new Promise(resolve => {
+        let settled = false
+        let rl: readline.Interface | null = null
+        let wasOnSignIn = onSignInPage(page)
+
+        const finish = (): void => {
+            if (settled) return
+            settled = true
+            clearInterval(timer)
+            rl?.close()
+            resolve()
+        }
+
+        const timer = setInterval(() => {
+            if (page.isClosed() || Date.now() > deadline) {
+                finish()
+                return
+            }
+            const nowOnSignIn = onSignInPage(page)
+            if (wasOnSignIn && !nowOnSignIn) {
+                console.log(`\n   ✓ 已离开登录页 / left the sign-in pages → ${shortUrl(page.url())}`)
+                finish()
+                return
+            }
+            wasOnSignIn = nowOnSignIn
+        }, 1500)
+
+        if (process.stdin.isTTY) {
+            rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+            rl.question('   完成后会自动检测，也可按 Enter 立即校验 / Detected automatically when done — or press Enter to check now... ', finish)
+        } else {
+            console.log('   完成后会自动检测 / Detected automatically when you are done...')
+        }
+    })
+}
+
+/**
+ * Fallback when the automated sign-in stopped (2FA, passkey, "stay signed in?", a Bing sign-in that
+ * didn't stick, ...): the human fixes it in the window, then we re-run the bot's own Login.login().
+ * That is idempotent ("Already logged in" path), applies the exact checks a scheduled run applies
+ * (Rewards dashboard + Bing sign-in) and saves the session on success — so there is no separate,
+ * weaker definition of "signed in" here to drift from the bot's.
+ */
+async function finishSignInManually(page: Page, verify: () => Promise<void>): Promise<void> {
+    const deadline = Date.now() + INTERACTIVE_WAIT_MS
+    console.log('\n👉 请在打开的浏览器窗口中完成剩余步骤（2FA / Passkey / 授权确认 / 重新登录 Bing）。')
+    console.log('👉 Complete the remaining steps in the browser window (2FA / passkey / consent / Bing sign-in).')
+
+    for (let attempt = 1; ; attempt++) {
+        if (page.isClosed()) throw new Error('浏览器窗口已关闭 / the browser window was closed')
+        console.log(`   当前页面 / current page: ${shortUrl(page.url())}`)
+
+        await waitUntilDone(page, deadline)
+        if (page.isClosed()) throw new Error('浏览器窗口已关闭 / the browser window was closed')
+
+        try {
+            await verify()
+            return
+        } catch (error) {
+            console.log(`\n⚠️ 校验仍未通过（第 ${attempt} 次）/ check still failing (attempt ${attempt}): ${error}`)
+        }
+        if (Date.now() > deadline) {
+            throw new Error(`登录未在 ${INTERACTIVE_WAIT_MS / 60_000} 分钟内完成 / sign-in not completed in time`)
+        }
+    }
+}
+
+async function loginSession(account: Account, isMobile: boolean): Promise<ModeResult> {
+    const label = isMobile ? '移动端 / Mobile' : '桌面端 / Desktop'
+    console.log(`\n========== ${label} ==========`)
+
+    const bot = new MicrosoftRewardsBot(isMobile)
+    bot.config.headless = false
+    bot.axios = new Axios(account.proxy)
+    const login = new Login(bot)
+
+    let managed: ManagedBrowser | null = null
+    let page: Page | null = null
+    try {
+        managed = await new Browser(bot).createBrowser(account.proxy, account.email)
+        page = await managed.context.newPage()
+        const activePage = page
+
+        // 1. Sign in with the bot's own automated flow (fills email/password, handles what it can — an
+        //    SMS/email code is asked for in this terminal). Whatever it can't get past, the human finishes.
+        //    Login.login saves the session itself once it passes.
+        const signIn = (): Promise<void> => login.login(activePage, account.email, account.password)
+        try {
+            await signIn()
+        } catch (error) {
+            console.log(`\n⚠️ 自动登录未完成 / Automated sign-in stopped: ${error}`)
+            await finishSignInManually(activePage, signIn)
+        }
+
+        // 2. The OAuth step every run performs. If Microsoft asks for consent / another check here,
+        //    complete it in the window — that is exactly what would otherwise fail headlessly.
+        const token = await login.getMobileAccessToken(activePage, account.email)
+
+        // 3. Prove the session works end-to-end against the backend the bot earns through.
+        const data = await new RewardsApi(bot, token).getData()
+
+        // 4. Persist after OAuth so the refreshed login.live.com cookies are the ones the cron run reuses.
+        await saveSessionData(bot.config.sessionPath, managed.context, account.email, isMobile)
+
+        return {
+            label,
+            ok: true,
+            detail: `余额 / balance ${data.balance} | ${data.promotions.length} promotions | country ${data.country}`
+        }
+    } catch (error) {
+        // Leave the window up so the user can see where it got stuck — but don't hang on a keypress the
+        // terminal may not be able to deliver: closing the window, or 2 minutes, also moves on.
+        if (managed) {
+            const windowClosed = page && !page.isClosed() ? page.waitForEvent('close', { timeout: 0 }) : Promise.resolve()
+            await enterOr('\n按 Enter 或关闭窗口继续（2 分钟后自动继续）/ Press Enter or close the window to continue (auto in 2 min)... ', windowClosed, 120_000)
+        }
+        return { label, ok: false, detail: String(error) }
+    } finally {
+        if (managed) {
+            await managed.context.close().catch(() => { })
+            await managed.browserInstance.close().catch(() => { })
+        }
+    }
+}
+
+async function main(): Promise<void> {
+    const options = parseArgs(process.argv.slice(2))
+
+    if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+        console.error('❌ 需要图形界面来显示浏览器窗口。Docker 部署请在宿主机运行本工具（容器挂载了 ./sessions，下次运行自动生效）。')
+        console.error('❌ A display is required for the browser window. For Docker, run this on the host — ./sessions is mounted into the container.')
+        process.exit(1)
+    }
+
+    const account = await pickAccount(loadAccounts(), options.email)
+    const config = loadConfig()
+
+    const desktop = options.desktop
+    let mobile = options.mobile
+    // Mobile sessions are only used for mobile search — don't ask for a second 2FA round if it's off.
+    if (mobile && !options.explicitModes && config.workers?.doMobileSearch === false) {
+        console.log('ℹ️ 配置中已关闭移动端搜索，跳过移动端会话 / mobile search is disabled in config — skipping the mobile session')
+        mobile = false
+    }
+
+    console.log('\nMicrosoft Rewards 主动登录 / Interactive sign-in')
+    console.log(`账户 / Account : ${account.email}`)
+    console.log(`会话 / Sessions: ${[desktop && 'desktop', mobile && 'mobile'].filter(Boolean).join(' + ')} → ${config.sessionPath}/${account.email}/`)
+    console.log('将打开可见浏览器窗口；需要验证时请在窗口中完成。/ A browser window will open; complete any verification there.')
+
+    const results: ModeResult[] = []
+    if (desktop) results.push(await loginSession(account, false))
+    if (mobile) results.push(await loginSession(account, true))
+
+    console.log('\n========== 结果 / Result ==========')
+    for (const r of results) {
+        console.log(`${r.ok ? '✅' : '❌'} ${r.label}: ${r.detail}`)
+    }
+    if (results.every(r => r.ok)) {
+        console.log('\n会话已保存，自动任务（含 Docker 容器）下次运行将直接复用。')
+        console.log('Sessions saved — the next scheduled run (including the Docker container) will reuse them.')
+    }
+
+    // loadConfig/loadAccounts leave file watchers running; exit explicitly.
+    process.exit(results.every(r => r.ok) ? 0 : 1)
+}
+
+if (require.main === module) {
+    main().catch(error => {
+        console.error('程序出错 / Error:', error)
+        process.exit(1)
+    })
+}

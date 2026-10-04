@@ -173,24 +173,24 @@ services:
 
 ## Troubleshooting & Testing
 
-### **Mobile 2FA Verification Issue**
+### **Sign-in Needs 2FA / Manual Verification**
 
-**Problem:** Mobile tasks prompt for two-factor authentication
+**Problem:** Scheduled runs get stuck at 2FA, a passkey prompt, "Stay signed in?" or a consent page (logs show `Bing login verification failed`, `OAuth authorization timeout`, etc.)
 
-**Solution:** Use the specialized 2FA verification assistant tool
+**Solution:** Run the interactive sign-in tool and complete the verification once in a visible browser
 
 ```bash
-# Run 2FA verification assistant
-npx ts-node src/helpers/manual-2fa-helper.ts
+npm run login                          # desktop + mobile sessions
+npm run login -- --mobile              # mobile session only (or --desktop)
+npm run login -- --email you@example.com   # pick an account when there are several
 ```
 
-**Usage Process:**
-1. Select language after running the command
-2. Enter the email and password to verify
-3. Complete 2FA verification steps in the opened browser
-4. Wait for OAuth authorization to complete
-5. Tool automatically saves mobile session data
-6. Re-run automation program, mobile tasks will skip 2FA verification
+**How it works:**
+1. Reads the account (including its proxy) from `config/accounts.json` and opens a visible window with the same fingerprint/geo settings the scheduled runs use
+2. Fills in email and password automatically; SMS/email codes are asked for in the terminal
+3. Anything the automation can't get past (2FA, passkey, consent, ...) you finish in the window; once it leaves Microsoft's sign-in pages the tool re-checks automatically (or press Enter in the terminal to check right away)
+4. Mints the OAuth token and reads the points balance; the session is saved to `sessions/<email>/` only after that succeeds
+5. Later scheduled runs reuse the session. For Docker, run it on the host (`./sessions` is mounted into the container) — no image rebuild needed
 
 ### **Popup Handling Issue**
 

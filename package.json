@@ -12,6 +12,7 @@
     "start": "node ./dist/src/index.js",
     "ts-start": "ts-node ./src/index.ts",
     "dev": "ts-node ./src/index.ts -dev",
+    "login": "ts-node ./src/helpers/manual-2fa-helper.ts",
     "kill-chrome-win": "powershell -Command \"Get-Process | Where-Object { $_.MainModule.FileVersionInfo.FileDescription -eq 'Google Chrome for Testing' } | ForEach-Object { Stop-Process -Id $_.Id -Force }\"",
     "create-docker": "docker build -t microsoftrewardspilot-docker ."
   },
