@@ -7,7 +7,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "pre-build": "npm i && rimraf dist && npx playwright install chromium",
+    "pre-build": "npm i && rimraf dist && node node_modules/playwright-core/cli.js install chromium",
     "build": "tsc",
     "start": "node ./dist/src/index.js",
     "ts-start": "ts-node ./src/index.ts",

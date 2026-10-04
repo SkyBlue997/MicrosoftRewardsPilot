@@ -81,8 +81,8 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
       - ./sessions:/usr/src/microsoftrewardspilot/sessions  # ログインセッションを保存
     environment:
       - NODE_ENV=production

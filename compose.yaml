@@ -5,9 +5,9 @@ services:
     restart: unless-stopped
     volumes:
       ### 请先复制示例配置文件：cp config/*.example config/accounts.json && cp config/config.json.example config/config.json
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json 
-      - ./sessions:/usr/src/microsoftrewardspilot/sessions # Optional, saves your login session
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
+      - ./sessions:/usr/src/microsoftrewardspilot/sessions # 保存登录会话
     environment:
       - NODE_ENV=production
       # Prefer odd, non-round, spread-out hours over 9,16 so runs don't cluster at obvious times.

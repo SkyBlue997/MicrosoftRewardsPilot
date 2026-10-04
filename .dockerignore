@@ -1,0 +1,21 @@
+# Keep the build context small and credentials OUT of the image (config comes from a volume mount).
+node_modules
+dist
+.git
+.gitignore
+sessions
+*.log
+*.tmp
+*.apk
+*.har
+.DS_Store
+**/.DS_Store
+.claude
+# Real per-user config holding credentials — provided at runtime via volume mount, never baked in
+config/accounts.json
+config/accounts.dev.json
+config/config.json
+config/config.dev.json
+# docs / dev-only
+docs
+README*.md
