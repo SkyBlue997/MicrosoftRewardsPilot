@@ -1,0 +1,30 @@
+# Keep the Docker build context clean.
+# Dependencies, build output, local sessions, logs and the real config/credentials must never be
+# baked into the image - compose.yaml mounts the config and sessions directories at runtime instead.
+node_modules/
+dist/
+sessions/
+.debug/
+notes
+
+# Real credentials / local config (only the .example templates are copied into the image)
+config/accounts.json
+config/accounts.dev.json
+config/config.json
+config/config.dev.json
+
+# Local logs and capture artifacts
+*.log
+*.tmp
+*.har
+*.apk
+edge.apk
+.env
+
+# Editor / tooling / VCS metadata
+.git/
+.gitattributes
+.gitignore
+.vscode/
+.idea/
+*.tsbuildinfo

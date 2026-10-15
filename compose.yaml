@@ -4,9 +4,12 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      ### 请先复制示例配置文件：cp config/*.example config/accounts.json && cp config/config.json.example config/config.json
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json 
+      # 先复制示例配置：cp config/config.json.example config/config.json
+      #                cp config/accounts.json.example config/accounts.json
+      # 挂载目标必须和代码的读取路径一致：utils/Load.ts 读的是 process.cwd()/config/*.json，
+      # 而容器里的 cwd 就是 Dockerfile 的 WORKDIR（/usr/src/microsoftrewardspilot）。
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
       - ./sessions:/usr/src/microsoftrewardspilot/sessions # Optional, saves your login session
     environment:
       - NODE_ENV=production

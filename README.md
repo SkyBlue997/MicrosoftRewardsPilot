@@ -38,16 +38,16 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. 安装依赖
-npm i
+# 2. 一键配置环境：安装依赖 → 下载本版本所需的 Chromium → 编译
+#（等价于 npm i + npm run prestart + npm run build，新机器首次会多下载约 230MB 浏览器）
+npm run setup
 
 # 3. 配置文件
 # 复制示例配置文件并编辑
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 4. 构建运行
-npm run build
+# 4. 运行（npm start 前会自动检查并补齐浏览器）
 npm start
 ```
 
@@ -57,18 +57,15 @@ npm start
 <summary><strong>Docker 部署（推荐）</strong> （点击展开）</summary>
 
 ```bash
-# 1. 准备配置文件
+# 1. 准备配置文件（运行时挂载进容器，不会打进镜像）
 # 复制示例配置文件并编辑
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. 构建
-npm run build
+# 2. 构建并启动容器（镜像内会自行安装依赖并下载 Chromium）
+docker compose up -d --build
 
-# 3. 启动容器
-docker compose up -d
-
-# 4. 查看日志(可选)
+# 3. 查看日志(可选)
 docker logs -f microsoftrewardspilot
 ```
 
@@ -81,8 +78,8 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
       - ./sessions:/usr/src/microsoftrewardspilot/sessions  # 保存登录会话
     environment:
       - NODE_ENV=production
@@ -94,6 +91,7 @@ services:
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
 > 地理位置/时区由 `config.json` 的 `searchSettings.multiLanguage.autoDetectLocation` 与 `searchSettings.autoTimezone` 控制（不是环境变量）。
+> 配置文件挂载在容器内的 `/usr/src/microsoftrewardspilot/config/`，与代码读取的 `process.cwd()/config` 一致；改完配置只需 `docker compose restart`，不必重建镜像。
 
 </details>
 
@@ -296,6 +294,43 @@ npx ts-node src/helpers/manual-2fa-helper.ts
 <summary><strong>内存不足</strong></summary>
 
 **解决方案：** 重启容器或检查系统资源使用情况
+
+</details>
+
+<details>
+<summary><strong>启动报 Executable doesn't exist at ...ms-playwright...</strong></summary>
+
+**原因：** 浏览器二进制不在项目目录里，而在每台机器各自的缓存目录（Windows `%LOCALAPPDATA%\ms-playwright`、Linux `~/.cache/ms-playwright`、macOS `~/Library/Caches/ms-playwright`）。`git clone` 或复制文件夹都不会带走它，所以每台新机器都要下载一次。
+
+**解决方案：** 用项目自带的守卫脚本检查并自动下载（`npm start` 前也会自动触发同样的检查）：
+
+```bash
+npm run prestart
+```
+
+Playwright 提示的 `npx playwright install` 在本项目里不一定可靠（`node_modules/.bin/playwright` 存在 bin 名冲突，可能落到 rebrowser 的 CLI 上），请优先使用上面的命令。下载慢或被墙时，先设置镜像再执行：
+
+```bash
+# bash / git bash
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
+
+**如果 `npm i` 本身就卡在/失败于浏览器下载**（网络受限时常见），可以先跳过自动下载，再单独补装：
+
+```bash
+# bash / git bash
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i
+unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD   # 该变量存在时守卫脚本会拒绝下载
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"; npm i
+Remove-Item Env:\PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
 
 </details>
 

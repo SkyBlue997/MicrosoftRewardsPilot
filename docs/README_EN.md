@@ -38,16 +38,17 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. Install Dependencies
-npm i
+# 2. One-shot environment setup: install deps -> download the Chromium build this version
+#    needs -> compile (same as npm i + npm run prestart + npm run build; the first run on a
+#    new machine also downloads ~230MB of browser binaries)
+npm run setup
 
 # 3. Configuration
 # Copy example configuration files and edit them
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 4. Build and Run
-npm run build
+# 4. Run (npm start checks/repairs the browser cache automatically first)
 npm start
 ```
 
@@ -57,18 +58,15 @@ npm start
 <summary><strong>Docker Deployment (Recommended)</strong> (Click to expand)</summary>
 
 ```bash
-# 1. Prepare Configuration Files
+# 1. Prepare Configuration Files (mounted at runtime, never baked into the image)
 # Copy example configuration files and edit them
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. Build
-npm run build
+# 2. Build and start the container (the image installs deps and downloads Chromium itself)
+docker compose up -d --build
 
-# 3. Start Container
-docker compose up -d
-
-# 4. View Logs (Optional)
+# 3. View Logs (Optional)
 docker logs -f microsoftrewardspilot
 ```
 
@@ -81,8 +79,8 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
       - ./sessions:/usr/src/microsoftrewardspilot/sessions  # Persist login sessions
     environment:
       - NODE_ENV=production
@@ -94,6 +92,7 @@ services:
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
 > Geo-location / timezone are controlled by `searchSettings.multiLanguage.autoDetectLocation` and `searchSettings.autoTimezone` in `config.json` (not environment variables).
+> The config files are mounted at `/usr/src/microsoftrewardspilot/config/`, matching the `process.cwd()/config` path the code reads, so after editing them a `docker compose restart` is enough - no rebuild needed.
 
 </details>
 
@@ -277,6 +276,43 @@ npx ts-node src/helpers/manual-2fa-helper.ts
 <summary><strong>Out of Memory</strong></summary>
 
 **Solution:** Restart container or check system resource usage
+
+</details>
+
+<details>
+<summary><strong>Startup fails with Executable doesn't exist at ...ms-playwright...</strong></summary>
+
+**Cause:** The browser binaries do not live in the project folder - they live in a per-user cache (Windows `%LOCALAPPDATA%\ms-playwright`, Linux `~/.cache/ms-playwright`, macOS `~/Library/Caches/ms-playwright`). `git clone` (or copying the folder) never brings that cache along, so every new machine has to download it once.
+
+**Solution:** Use the bundled guard script, which checks the cache and downloads only what is missing (`npm start` runs the same check automatically):
+
+```bash
+npm run prestart
+```
+
+The `npx playwright install` command Playwright suggests is not dependable in this project (`node_modules/.bin/playwright` is claimed by two packages, so it may land on rebrowser's CLI instead), so prefer the command above. If the download is slow or blocked, set a mirror first:
+
+```bash
+# bash / git bash
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
+
+**If `npm i` itself stalls or fails on the browser download** (common on restricted networks), skip that download first and install the browser separately:
+
+```bash
+# bash / git bash
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i
+unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD   # while set, the guard script refuses to download
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"; npm i
+Remove-Item Env:\PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
 
 </details>
 

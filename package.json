@@ -7,7 +7,9 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "pre-build": "npm i && rimraf dist && npx playwright install chromium",
+    "pre-build": "npm i && rimraf dist && node ./scripts/ensure-browser.js",
+    "setup": "npm i && node ./scripts/ensure-browser.js && npm run build",
+    "prestart": "node ./scripts/ensure-browser.js",
     "build": "tsc",
     "start": "node ./dist/src/index.js",
     "ts-start": "ts-node ./src/index.ts",

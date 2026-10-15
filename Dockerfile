@@ -1,5 +1,6 @@
 # Use an official Node.js runtime as a base image
-FROM node:18
+# (Node 22 = current LTS; Node 18 is end-of-life and no longer receives security fixes)
+FROM node:22
 
 # Set the working directory in the container
 WORKDIR /usr/src/microsoftrewardspilot
@@ -35,10 +36,15 @@ RUN apt-get update && apt-get install -y \
     libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy all files to the working directory
+# Copy the project into the image.
+# .dockerignore keeps node_modules/, dist/, sessions/, .debug/ and the real config files
+# (config/accounts.json, config/config.json) out of the build context - compose.yaml mounts those
+# at runtime instead, so credentials never end up baked into an image layer.
 COPY . .
 
-# Install dependencies, set permissions, and build the script
+# Install dependencies, download the Chromium build this Playwright version expects
+# (scripts/ensure-browser.js -> /root/.cache/ms-playwright, baked into the image) and compile.
+# Note: `npm run pre-build` is an explicit script call here - it is not an npm lifecycle hook.
 RUN npm install && \
     chmod -R 755 /usr/src/microsoftrewardspilot/node_modules && \
     npm run pre-build && \

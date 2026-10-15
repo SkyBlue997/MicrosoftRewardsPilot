@@ -21,3 +21,5 @@ edge.apk
 .vscode/
 .idea/
 *.tsbuildinfo
+# Local run logs + launcher (npm-start.log can contain account emails and live auth URLs)
+.debug/

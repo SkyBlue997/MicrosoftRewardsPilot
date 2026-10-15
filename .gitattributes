@@ -1,2 +1,7 @@
+# Line endings: files that end up inside a Linux container must be LF in every working tree.
+# CRLF in a Dockerfile / shell script breaks the build ("\r: command not found").
+Dockerfile text eol=lf
 *.sh text eol=lf
 *.template text eol=lf
+# Windows batch files are the opposite case: keep CRLF in the working tree so cmd.exe stays happy.
+*.bat text eol=crlf

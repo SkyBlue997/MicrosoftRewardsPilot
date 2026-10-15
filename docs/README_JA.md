@@ -38,16 +38,17 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. 依存関係のインストール
-npm i
+# 2. 環境を一括セットアップ：依存関係のインストール → このバージョンが必要とする Chromium の
+#    ダウンロード → ビルド（npm i + npm run prestart + npm run build と同じ。新しいマシンでは
+#    初回のみ約 230MB のブラウザもダウンロードします）
+npm run setup
 
 # 3. 設定ファイル
 # サンプル設定ファイルをコピーして編集
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 4. ビルドと実行
-npm run build
+# 4. 実行（npm start の前にブラウザキャッシュを自動で確認・補修します）
 npm start
 ```
 
@@ -57,18 +58,15 @@ npm start
 <summary><strong>Docker デプロイ（推奨）</strong> （クリックして展開）</summary>
 
 ```bash
-# 1. 設定ファイルの準備
+# 1. 設定ファイルの準備（実行時にマウントされ、イメージには含まれません）
 # サンプル設定ファイルをコピーして編集
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. ビルド
-npm run build
+# 2. コンテナのビルドと開始（イメージ内で依存関係のインストールと Chromium のダウンロードを実行）
+docker compose up -d --build
 
-# 3. コンテナの開始
-docker compose up -d
-
-# 4. ログの確認（オプション）
+# 3. ログの確認（オプション）
 docker logs -f microsoftrewardspilot
 ```
 
@@ -81,8 +79,8 @@ services:
     container_name: microsoftrewardspilot
     restart: unless-stopped
     volumes:
-      - ./config/accounts.json:/usr/src/microsoftrewardspilot/dist/config/accounts.json
-      - ./config/config.json:/usr/src/microsoftrewardspilot/dist/config/config.json
+      - ./config/accounts.json:/usr/src/microsoftrewardspilot/config/accounts.json
+      - ./config/config.json:/usr/src/microsoftrewardspilot/config/config.json
       - ./sessions:/usr/src/microsoftrewardspilot/sessions  # ログインセッションを保存
     environment:
       - NODE_ENV=production
@@ -94,6 +92,7 @@ services:
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
 > 地理的位置／タイムゾーンは `config.json` の `searchSettings.multiLanguage.autoDetectLocation` と `searchSettings.autoTimezone` で制御します（環境変数ではありません）。
+> 設定ファイルはコンテナ内の `/usr/src/microsoftrewardspilot/config/` にマウントされ、コードが読む `process.cwd()/config` と一致します。設定変更後は `docker compose restart` だけで反映され、再ビルドは不要です。
 
 </details>
 
@@ -277,6 +276,43 @@ npx ts-node src/helpers/manual-2fa-helper.ts
 <summary><strong>メモリ不足</strong></summary>
 
 **解決方法：** コンテナを再起動するか、システムリソースの使用状況を確認
+
+</details>
+
+<details>
+<summary><strong>起動時に Executable doesn't exist at ...ms-playwright... が出る</strong></summary>
+
+**原因：** ブラウザのバイナリはプロジェクト内ではなく、マシンごとのユーザーキャッシュ（Windows `%LOCALAPPDATA%\ms-playwright`、Linux `~/.cache/ms-playwright`、macOS `~/Library/Caches/ms-playwright`）にあります。`git clone` やフォルダのコピーではこのキャッシュは移動しないため、新しいマシンでは一度ダウンロードが必要です。
+
+**解決方法：** 同梱のガードスクリプトで確認し、不足分だけをダウンロードします（`npm start` の前にも同じチェックが自動実行されます）：
+
+```bash
+npm run prestart
+```
+
+Playwright が案内する `npx playwright install` は本プロジェクトでは確実ではありません（`node_modules/.bin/playwright` の bin 名が衝突しており、rebrowser 側の CLI に解決されることがあります）。上記のコマンドを優先してください。ダウンロードが遅い／遮断される場合は、先にミラーを設定します：
+
+```bash
+# bash / git bash
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
+
+**`npm i` 自体がブラウザのダウンロードで止まる／失敗する場合**（ネットワーク制限時に多い）は、先に自動ダウンロードを止めて、あとから個別に導入します：
+
+```bash
+# bash / git bash
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i
+unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD   # この変数が残っているとガードスクリプトはダウンロードを拒否します
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright npm run prestart
+
+# PowerShell
+$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"; npm i
+Remove-Item Env:\PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+$env:PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.npmmirror.com/binaries/playwright"; npm run prestart
+```
 
 </details>
 
