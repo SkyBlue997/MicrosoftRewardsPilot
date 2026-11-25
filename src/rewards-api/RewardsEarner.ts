@@ -1,10 +1,16 @@
+import fs from 'fs'
+import path from 'path'
+
 import { RewardsApi, ApiPromotion } from './RewardsApi'
 import { MicrosoftRewardsBot } from '../index'
 
+const APP_CHECK_IN = 'app-check-in'
+
 /**
  * Earns the claimable Rewards activities through the new dapi backend:
- * daily set, daily offers, explore-on-Bing, monthly topics (urlreward), daily check-in,
- * and read-to-earn. Search points are NOT handled here (they require real Bing searches).
+ * daily set, daily offers, monthly topics (urlreward), daily check-in, and read-to-earn.
+ * Search points are NOT handled here (they require real Bing searches), nor are Explore-on-Bing
+ * offers (ExploreRunner).
  *
  * Claims are spaced with randomized human-like delays for anti-detection — a real member does
  * not complete a dozen activities in the same second.
@@ -12,8 +18,52 @@ import { MicrosoftRewardsBot } from '../index'
 export class RewardsEarner {
     private api: RewardsApi
 
-    constructor(private bot: MicrosoftRewardsBot, accessToken: string, country?: string) {
+    /**
+     * @param email When given, what was claimed today is remembered in the account's session folder,
+     *              so the day's later runs don't ask for the same things again.
+     */
+    constructor(private bot: MicrosoftRewardsBot, accessToken: string, country?: string, private email?: string) {
         this.api = new RewardsApi(bot, accessToken, country || 'us')
+    }
+
+    /**
+     * The promotions list doesn't say that today's check-in, app check-in or read-to-earn is already
+     * done — a claim just answers "no points". With several runs a day those requests were repeated
+     * on every run; this is the per-day record that stops that.
+     */
+    private claimedTodayFile(): string | null {
+        return this.email ? path.join(process.cwd(), this.bot.config.sessionPath, this.email, 'claims_today.json') : null
+    }
+
+    private static today(): string {
+        const now = new Date()
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    }
+
+    private loadClaimedToday(): Set<string> {
+        const file = this.claimedTodayFile()
+        try {
+            if (file && fs.existsSync(file)) {
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8')) as { day?: string, ids?: string[] }
+                if (saved.day === RewardsEarner.today() && Array.isArray(saved.ids)) {
+                    return new Set(saved.ids)
+                }
+            }
+        } catch {
+            // unreadable record: start the day over (worst case one repeated request per item)
+        }
+        return new Set()
+    }
+
+    private saveClaimedToday(ids: Set<string>): void {
+        const file = this.claimedTodayFile()
+        if (!file) return
+        try {
+            fs.mkdirSync(path.dirname(file), { recursive: true })
+            fs.writeFileSync(file, JSON.stringify({ day: RewardsEarner.today(), ids: [...ids] }))
+        } catch (error) {
+            this.log(`Could not save today's claim record: ${error}`, 'warn')
+        }
     }
 
     private log(message: string, type: 'log' | 'warn' | 'error' = 'log', color?: 'green' | 'yellow'): void {
@@ -36,8 +86,10 @@ export class RewardsEarner {
 
         this.log(`Balance: ${data.balance} | ${data.promotions.length} promotions | country: ${data.country}`)
 
-        const claimable = data.promotions.filter(p => RewardsApi.isClaimable(p))
-        if (!claimable.length) {
+        const claimedToday = this.loadClaimedToday()
+        const claimable = data.promotions.filter(p => RewardsApi.isClaimable(p) && !claimedToday.has(p.offerId))
+        const appCheckInDue = !claimedToday.has(APP_CHECK_IN)
+        if (!claimable.length && !appCheckInDue) {
             this.log('No claimable activities — everything is already complete')
             return { claimed: 0, pointsGained: 0, balance: data.balance }
         }
@@ -52,9 +104,11 @@ export class RewardsEarner {
             try {
                 if (p.type === 'msnreadearn') {
                     const gained = await this.doReadToEarn(p)
-                    if (gained > 0) { claimedCount++; totalGained += gained; didClaim = true }
+                    // Nothing gained can also mean "not available yet", so only a finished read is recorded.
+                    if (gained > 0) { claimedCount++; totalGained += gained; didClaim = true; claimedToday.add(p.offerId) }
                 } else {
                     const res = await this.api.claim(p.offerId)
+                    claimedToday.add(p.offerId)
                     balance = res.balance || balance
                     if (res.duplicate || res.points === 0) {
                         // No points credited: already completed today, future-dated/locked (e.g. a daily
@@ -71,6 +125,7 @@ export class RewardsEarner {
             } catch (error) {
                 this.log(`❌ Failed "${p.title}" (${p.offerId}): ${error}`, 'warn')
             }
+            this.saveClaimedToday(claimedToday)
             // Space the claims like a human: a real pause after a genuine completion, a short jitter
             // after a no-op (keeps the POSTs from firing in a burst without wasting minutes on nothing).
             if (didClaim) {
@@ -81,19 +136,23 @@ export class RewardsEarner {
         }
 
         // Bing-app daily check-in (type:103, the "必应应用连签" streak) — separate from the web check-in
-        // claimed in the loop above. Best-effort: credits on a fresh day, no-ops once already done.
-        try {
-            const ci = await this.api.appCheckIn()
-            if (ci.points > 0) {
-                claimedCount++
-                totalGained += ci.points
-                balance = ci.balance || balance
-                this.log(`✅ App check-in (+${ci.points}) | balance ${ci.balance}`, 'log', 'green')
-            } else {
-                this.log('• App check-in — already done today')
+        // claimed in the loop above. Once a day; it no-ops when repeated.
+        if (appCheckInDue) {
+            try {
+                const ci = await this.api.appCheckIn()
+                claimedToday.add(APP_CHECK_IN)
+                this.saveClaimedToday(claimedToday)
+                if (ci.points > 0) {
+                    claimedCount++
+                    totalGained += ci.points
+                    balance = ci.balance || balance
+                    this.log(`✅ App check-in (+${ci.points}) | balance ${ci.balance}`, 'log', 'green')
+                } else {
+                    this.log('• App check-in — already done today')
+                }
+            } catch (error) {
+                this.log(`App check-in failed: ${error}`, 'warn')
             }
-        } catch (error) {
-            this.log(`App check-in failed: ${error}`, 'warn')
         }
 
         this.log(`Activities done — claimed ${claimedCount}, +${totalGained} points (balance ~${balance})`, 'log', 'green')

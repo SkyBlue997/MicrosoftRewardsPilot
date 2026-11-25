@@ -430,7 +430,7 @@ export class MicrosoftRewardsBot {
             // through the dapi backend. Get the OAuth token, then claim activities via the API.
             this.accessToken = await this.login.getMobileAccessToken(this.homePage, account.email)
 
-            const earner = new RewardsEarner(this, this.accessToken)
+            const earner = new RewardsEarner(this, this.accessToken, undefined, account.email)
             const result = await earner.run()
             log(this.isMobile, 'MAIN-POINTS', `Desktop activities done: claimed ${result.claimed}, +${result.pointsGained} points (balance ${result.balance})`)
 

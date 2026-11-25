@@ -173,12 +173,34 @@ export class RewardsApi {
         return { points: Number(r.activity?.p) || 0, balance: Number(r.balance) || 0, duplicate: !!r.isDuplicate }
     }
 
-    /** Promotions that can be completed by a single claim (not search, not info/sweepstakes). */
-    static isClaimable(p: ApiPromotion): boolean {
+    /**
+     * Promotions a claim request can actually complete right now (not search, not info/sweepstakes).
+     *
+     * Everything listed but not yet earnable is left out, because a claim for it is a request the app
+     * would never send and it can only come back empty: tomorrow's daily set (listed a day ahead),
+     * locked cards, point-less info cards, and Explore-on-Bing offers (earned in the Rewards panel by
+     * ExploreRunner, never through this endpoint). Those were 77% of all claim requests.
+     */
+    static isClaimable(p: ApiPromotion, now: Date = new Date()): boolean {
         if (p.complete) return false
         // Daily check-in is flagged hidden (it renders in a dedicated widget) but is genuinely claimable.
         if (p.type === 'checkin') return true
         if (p.hidden) return false
-        return p.type === 'urlreward' || p.type === 'msnreadearn'
+        if (p.type !== 'urlreward' && p.type !== 'msnreadearn') return false
+
+        if (p.attributes.isExploreOnBingTask === 'True' || /exploreonbing/i.test(p.offerId)) return false
+        if (p.attributes.is_unlocked === 'False') return false
+        if (p.max < 0) return false
+        if (RewardsApi.isFutureDate(p.dailySetDate, now)) return false
+        return true
+    }
+
+    /** True for a daily_set_date ("MM/DD/YYYY") later than the local calendar day of `now`. */
+    private static isFutureDate(date: string | null, now: Date): boolean {
+        const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(date ?? '')
+        if (!m) return false
+        const day = Number(m[3]) * 10000 + Number(m[1]) * 100 + Number(m[2])
+        const today = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate()
+        return day > today
     }
 }
