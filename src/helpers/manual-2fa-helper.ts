@@ -99,10 +99,23 @@ function parseArgs(argv: string[]): Options {
     return { email, desktop: both || onlyDesktop, mobile: both || onlyMobile, explicitModes: !both }
 }
 
+/**
+ * While a readline prompt is active it swallows Ctrl-C (it just closes the prompt, which the callers
+ * here treat as "continue") — so the helper could not be aborted. Make Ctrl-C quit, as expected.
+ */
+function prompt(): readline.Interface {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    rl.on('SIGINT', () => {
+        console.log('\n已中止 / Aborted')
+        process.exit(130)
+    })
+    return rl
+}
+
 /** One-shot prompt. Login.promptForInput opens its own readline for SMS codes, so never hold one open. */
 function ask(question: string): Promise<string> {
     return new Promise(resolve => {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        const rl = prompt()
         rl.question(question, answer => {
             resolve(answer.trim())
             rl.close()
@@ -115,7 +128,7 @@ function ask(question: string): Promise<string> {
 /** Wait for Enter, but also move on when `until` settles or after timeoutMs (the terminal may not take input). */
 function enterOr(question: string, until: Promise<unknown>, timeoutMs: number): Promise<void> {
     return new Promise(resolve => {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        const rl = prompt()
         const finish = (): void => {
             clearTimeout(timer)
             rl.close()
@@ -203,7 +216,7 @@ function waitUntilDone(page: Page, deadline: number): Promise<void> {
         }, 1500)
 
         if (process.stdin.isTTY) {
-            rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+            rl = prompt()
             rl.question('   完成后会自动检测，也可按 Enter 立即校验 / Detected automatically when done — or press Enter to check now... ', finish)
         } else {
             console.log('   完成后会自动检测 / Detected automatically when you are done...')
