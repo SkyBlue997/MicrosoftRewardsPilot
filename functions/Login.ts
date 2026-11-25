@@ -65,16 +65,17 @@ export class Login {
             await this.checkAccountLocked(page)
 
             // New Rewards UI: logged in when we land on the authenticated SPA (rewards.bing.com,
-            // not the anonymous /welcome or a sign-in page). The old RewardsPortal marker is gone.
+            // not an anonymous landing or sign-in page). The old RewardsPortal marker is gone.
             await this.bot.utils.wait(1500)
             const cu = new URL(page.url())
+            const onAnonymousPage = this.isAnonymousRewardsPath(cu.pathname)
             const isLoggedIn = (cu.hostname === 'rewards.bing.com' || cu.hostname.endsWith('.rewards.bing.com'))
-                && !cu.pathname.includes('/welcome') && !cu.pathname.includes('/signin')
+                && !onAnonymousPage
 
             if (!isLoggedIn) {
-                // The anonymous welcome page has no email field — it requires clicking "Sign in"
+                // The anonymous landing page has no email field — it requires clicking "Sign in"
                 // to reach the Microsoft login page first.
-                if (page.url().includes('/welcome')) {
+                if (onAnonymousPage) {
                     await this.startSignInFromWelcome(page)
                 }
                 await this.execLogin(page, email, password)
@@ -101,15 +102,25 @@ export class Login {
         }
     }
 
+    /**
+     * rewards.bing.com paths a signed-OUT visitor sits on. Signed-out visitors are sent to /about
+     * (formerly /welcome) and sign in through /auth/login (formerly /signin). Treating these as the
+     * authenticated dashboard skips credential entry entirely — which is what happened to every
+     * first-time login once /about replaced /welcome.
+     */
+    private isAnonymousRewardsPath(pathname: string): boolean {
+        return ['/welcome', '/about', '/signin', '/auth/'].some(p => pathname.includes(p))
+    }
+
     private async startSignInFromWelcome(page: Page): Promise<void> {
         try {
-            this.bot.log(this.bot.isMobile, 'LOGIN', 'On Rewards welcome page — clicking "Sign in" to reach the Microsoft login page')
-            const signInLink = await page.waitForSelector('#rewards-header-sign-in, #card-footer-sign-in-link', { state: 'visible', timeout: 5000 }).catch(() => null)
+            this.bot.log(this.bot.isMobile, 'LOGIN', 'On the signed-out Rewards page — clicking "Sign in" to reach the Microsoft login page')
+            const signInLink = await page.waitForSelector('a[href*="/auth/login"]:visible, #rewards-header-sign-in, #card-footer-sign-in-link', { state: 'visible', timeout: 5000 }).catch(() => null)
             if (signInLink) {
                 await signInLink.click()
             } else {
-                this.bot.log(this.bot.isMobile, 'LOGIN', 'Sign-in link not found on welcome page; navigating to signin directly', 'warn')
-                await page.goto('https://rewards.bing.com/signin', { waitUntil: 'domcontentloaded' }).catch(() => { })
+                this.bot.log(this.bot.isMobile, 'LOGIN', 'Sign-in link not found on the signed-out page; navigating to it directly', 'warn')
+                await page.goto('https://rewards.bing.com/auth/login', { waitUntil: 'domcontentloaded' }).catch(() => { })
             }
             // Wait for the Microsoft login page (email field, or password/userDisplayName if prefilled)
             await page.waitForSelector('input[type="email"], input[type="password"], #userDisplayName', { state: 'visible', timeout: 15000 }).catch(() => null)
@@ -642,7 +653,7 @@ export class Login {
             // rewards.bing.com/dashboard. The old "/" path + RewardsPortal markers are gone, so treat
             // reaching the rewards host past the welcome/sign-in pages as logged in.
             const onRewardsHost = currentURL.hostname === targetHostname || currentURL.hostname.endsWith('.rewards.bing.com')
-            const onLoginPage = currentURL.pathname.includes('/welcome') || currentURL.pathname.includes('/signin') || currentURL.pathname.includes('/createuser')
+            const onLoginPage = this.isAnonymousRewardsPath(currentURL.pathname) || currentURL.pathname.includes('/createuser')
             if (onRewardsHost && !onLoginPage) {
                 break
             }
