@@ -19,6 +19,7 @@ export class Login {
     private scope: string = 'service::prod.rewardsplatform.microsoft.com::MBI_SSL'
     // Flag to prevent spamming passkey logs after first handling
     private passkeyHandled: boolean = false
+    private termsUpdateClicks: number = 0
     private lastNoPromptLog: number = 0
     private noPromptIterations: number = 0
     private humanBehavior: HumanBehaviorSimulator
@@ -68,9 +69,9 @@ export class Login {
             // not an anonymous landing or sign-in page). The old RewardsPortal marker is gone.
             await this.bot.utils.wait(1500)
             const cu = new URL(page.url())
-            const onAnonymousPage = this.isAnonymousRewardsPath(cu.pathname)
-            const isLoggedIn = (cu.hostname === 'rewards.bing.com' || cu.hostname.endsWith('.rewards.bing.com'))
-                && !onAnonymousPage
+            const onRewardsHost = cu.hostname === 'rewards.bing.com' || cu.hostname.endsWith('.rewards.bing.com')
+            const onAnonymousPage = onRewardsHost && await this.isSignedOutRewardsPage(page, 3000)
+            const isLoggedIn = onRewardsHost && !onAnonymousPage
 
             if (!isLoggedIn) {
                 // The anonymous landing page has no email field — it requires clicking "Sign in"
@@ -103,13 +104,23 @@ export class Login {
     }
 
     /**
-     * rewards.bing.com paths a signed-OUT visitor sits on. Signed-out visitors are sent to /about
-     * (formerly /welcome) and sign in through /auth/login (formerly /signin). Treating these as the
-     * authenticated dashboard skips credential entry entirely — which is what happened to every
-     * first-time login once /about replaced /welcome.
+     * Is this rewards.bing.com page the signed-OUT experience? The URL alone can't tell: signed-out
+     * visitors are sent to /about (formerly /welcome) and sign in through /auth/login (formerly
+     * /signin) — but a signed-in member ALSO lands on /about on a first visit ("Welcome back"). The
+     * signed-out pages offer a sign-in link; the signed-in ones show the balance instead.
+     * Getting this wrong either way breaks login: "signed in" skips credential entry for a browser
+     * with no session, "signed out" never accepts a login that actually succeeded.
      */
-    private isAnonymousRewardsPath(pathname: string): boolean {
-        return ['/welcome', '/about', '/signin', '/auth/'].some(p => pathname.includes(p))
+    private async isSignedOutRewardsPage(page: Page, waitMs = 0): Promise<boolean> {
+        const { pathname } = new URL(page.url())
+        if (['/welcome', '/signin', '/auth/'].some(p => pathname.includes(p))) {
+            return true
+        }
+        const signInLink = 'a[href*="/auth/login"]'
+        if (waitMs > 0) {
+            return await page.waitForSelector(signInLink, { state: 'attached', timeout: waitMs }).then(() => true).catch(() => false)
+        }
+        return await page.locator(signInLink).count().then(n => n > 0).catch(() => false)
     }
 
     private async startSignInFromWelcome(page: Page): Promise<void> {
@@ -598,6 +609,8 @@ export class Login {
         while (true) {
             // Attempt to dismiss passkey/passkey-like screens quickly (non-blocking)
             await this.tryDismissPasskeyPrompt(page)
+            // A terms-update interstitial can be inserted into the authorize redirect too
+            await this.acceptTermsUpdate(page)
             if (currentUrl.hostname === 'login.live.com' && currentUrl.pathname === '/oauth20_desktop.srf') {
                 code = currentUrl.searchParams.get('code')!
                 break
@@ -647,13 +660,15 @@ export class Login {
 
         // eslint-disable-next-line no-constant-condition
         while (true) {
-            await this.dismissLoginMessages(page)
+            // The page navigates on its own between these prompts; a DOM query that races a navigation
+            // ("Execution context was destroyed") is not a login failure — look again next iteration.
+            await this.dismissLoginMessages(page).catch(() => { })
             const currentURL = new URL(page.url())
             // New Rewards UI: a successful login lands on the authenticated SPA at
             // rewards.bing.com/dashboard. The old "/" path + RewardsPortal markers are gone, so treat
             // reaching the rewards host past the welcome/sign-in pages as logged in.
             const onRewardsHost = currentURL.hostname === targetHostname || currentURL.hostname.endsWith('.rewards.bing.com')
-            const onLoginPage = this.isAnonymousRewardsPath(currentURL.pathname) || currentURL.pathname.includes('/createuser')
+            const onLoginPage = currentURL.pathname.includes('/createuser') || (onRewardsHost && await this.isSignedOutRewardsPage(page))
             if (onRewardsHost && !onLoginPage) {
                 break
             }
@@ -848,7 +863,58 @@ export class Login {
         return false
     }
 
+    /**
+     * "We're updating our terms" (Microsoft Services Agreement update, account.live.com/tou/accrue):
+     * an interstitial Microsoft inserts after sign-in or into the OAuth redirect. Nothing proceeds
+     * until its primary button ("Next") is pressed, so an unattended run would sit on it until the
+     * login timeout. Scoped strictly to that page's own URL — the generic primary/submit selectors
+     * must never be clicked on any other page.
+     */
+    private async acceptTermsUpdate(page: Page): Promise<boolean> {
+        let url: URL
+        try {
+            url = new URL(page.url())
+        } catch {
+            return false
+        }
+        if (url.hostname !== 'account.live.com' || !url.pathname.startsWith('/tou/')) {
+            return false
+        }
+        if (this.termsUpdateClicks >= 5) {
+            return false
+        }
+
+        const candidates = [
+            page.locator('button[data-testid="primaryButton"]'),
+            page.locator('#iNext'),
+            page.locator('button[type="submit"], input[type="submit"]'),
+            page.getByRole('button', { name: /^(next|accept|continue|次へ|同意|下一步|接受|继续)/i })
+        ]
+        for (const candidate of candidates) {
+            const button = candidate.first()
+            if (!(await button.isVisible().catch(() => false))) continue
+
+            const label = ((await button.textContent().catch(() => '')) || (await button.getAttribute('value').catch(() => '')) || '').trim()
+            await button.click().catch(() => { })
+            this.termsUpdateClicks++
+            this.bot.log(this.bot.isMobile, 'LOGIN-TERMS', `Microsoft terms-update page ("${await page.title().catch(() => '')}") -> clicked "${label}"`)
+            await page.waitForTimeout(1500)
+            return true
+        }
+
+        if (this.termsUpdateClicks === 0) {
+            this.termsUpdateClicks = 5
+            this.bot.log(this.bot.isMobile, 'LOGIN-TERMS', 'Microsoft terms-update page is showing but its button was not found — it must be accepted manually (npm run login)', 'warn')
+        }
+        return false
+    }
+
     private async dismissLoginMessages(page: Page) {
+        if (await this.acceptTermsUpdate(page)) {
+            this.noPromptIterations = 0
+            return
+        }
+
         let didSomething = false
 
         // PASSKEY / Windows Hello / Sign in faster
@@ -1021,6 +1087,8 @@ export class Login {
                     }
                 }
 
+                // The Bing sign-in redirect goes through Microsoft's account pages as well
+                await this.acceptTermsUpdate(page)
                 await this.bot.utils.wait(1000)
             }
 
