@@ -46,6 +46,8 @@ export class MicrosoftRewardsBot {
     private accounts: Account[]
     private login = new Login(this)
     private accessToken: string = ''
+    // Set by Desktop() when its own search run saw every search promotion at its maximum
+    private searchCapFilled: boolean = false
 
     public axios!: Axios
 
@@ -262,6 +264,9 @@ export class MicrosoftRewardsBot {
      */
     private async processAccount(account: Account): Promise<void> {
         this.axios = new Axios(account.proxy)
+        // Per-account state: nothing learned about the previous account may carry over
+        this.accessToken = ''
+        this.searchCapFilled = false
 
         // 🎯 为新账户清理弹窗处理历史
         this.browser.utils.clearPopupHistory()
@@ -458,7 +463,7 @@ export class MicrosoftRewardsBot {
                         }
                     }
                     const searcher = new SearchRunner(this, api, searchPage, account.email)
-                    await searcher.run()
+                    this.searchCapFilled = (await searcher.run()).capFilled
                 } catch (searchError) {
                     log(this.isMobile, 'SEARCH', `Desktop search failed: ${searchError}`, 'error')
                 } finally {
@@ -502,6 +507,12 @@ export class MicrosoftRewardsBot {
         // sub-cap and mobile fills the rest toward the daily max). So run whenever that promotion still
         // has room; skip when there's no search promotion (e.g. a brand-new account) or it's already
         // maxed (e.g. PC search already filled the whole daily cap) — avoids a pointless login.
+        // The desktop search that just ran is the freshest source: asked right after it, the API can
+        // still report the old progress and a mobile browser (another sign-in) is started for nothing.
+        if (this.searchCapFilled) {
+            log(this.isMobile, 'MAIN', 'Daily search cap already filled — skipping mobile browser')
+            return
+        }
         if (this.accessToken) {
             try {
                 const data = await new RewardsApi(this, this.accessToken).getData()

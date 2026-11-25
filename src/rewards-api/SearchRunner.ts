@@ -34,8 +34,12 @@ export class SearchRunner {
         this.bot.log(this.bot.isMobile, 'SEARCH', message, type, color)
     }
 
-    /** Run searches until the daily search promotion is complete (or a safety cap is hit). */
-    async run(): Promise<{ gained: number }> {
+    /**
+     * Run searches until the daily search promotion is complete (or a safety cap is hit).
+     * `capFilled` says every search promotion the account has is now at its maximum, as this run saw
+     * it — the caller can rely on that instead of asking the API again, which lags a few seconds.
+     */
+    async run(): Promise<{ gained: number, capFilled: boolean }> {
         const tag = this.bot.isMobile ? 'MobileSearch' : 'PCSearch'
 
         // One read up front: gives us both the search promotion AND the account market (for query locale).
@@ -44,15 +48,18 @@ export class SearchRunner {
             || data.promotions.find(p => p.type === 'search')
         if (!promo) {
             this.log(`No ${tag} promotion found (account may be too new or already maxed)`, 'warn')
-            return { gained: 0 }
+            return { gained: 0, capFilled: false }
         }
+        const filled = (p: ApiPromotion): boolean => p.max > 0 && p.progress >= p.max
+        // Any OTHER search promotion (a separate mobile one, on accounts that have it) must be full too.
+        const othersFilled = data.promotions.filter(p => p.type === 'search' && p.offerId !== promo?.offerId).every(filled)
 
         const lang = GeoLanguageDetector.getLanguageFromCountry((data.country || 'us').toUpperCase())
         const startProgress = promo.progress
         this.log(`${tag}: ${promo.progress}/${promo.max} points | query locale: ${lang}`)
         if (promo.progress >= promo.max && promo.max > 0) {
             this.log('Search points already maxed today', 'log', 'green')
-            return { gained: 0 }
+            return { gained: 0, capFilled: othersFilled }
         }
 
         const safetyCap = 40
@@ -94,7 +101,7 @@ export class SearchRunner {
 
         const gained = Math.max(0, promo.progress - startProgress)
         this.log(`Search finished: ${promo.progress}/${promo.max} (+${gained} this run, ${count} searches)`, 'log', 'green')
-        return { gained }
+        return { gained, capFilled: filled(promo) && othersFilled }
     }
 
     private async findSearchPromotion(tag: string): Promise<ApiPromotion | undefined> {
