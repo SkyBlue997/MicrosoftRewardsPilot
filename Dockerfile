@@ -1,5 +1,6 @@
 # Use an official Node.js runtime as a base image
-FROM node:18
+# rebrowser-playwright >= 1.5x needs Node 20+
+FROM node:22
 
 # Set the working directory in the container
 WORKDIR /usr/src/microsoftrewardspilot
