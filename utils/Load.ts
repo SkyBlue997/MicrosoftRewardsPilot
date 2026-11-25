@@ -7,7 +7,7 @@ import * as path from 'path'
 import { Account } from '../interfaces/Account'
 import { Config, ConfigSaveFingerprint } from '../interfaces/Config'
 import { log } from './Logger'
-import { edgeMajorFromUserAgent, updateFingerprintUserAgent, userAgentRefreshReason, userAgentStaleReason } from './UserAgent'
+import { edgeMajorFromUserAgent, edgeMajorToClaim, updateFingerprintUserAgent, userAgentRefreshReason, userAgentStaleReason } from './UserAgent'
 
 // 缓存管理
 let configCache: Config | null = null
@@ -249,21 +249,26 @@ export async function loadSessionData(sessionPath: string, email: string, isMobi
             // rest of the device fingerprint (screen, WebGL, fonts...) stable. The original is kept as
             // a .bak; Browser.createBrowser writes the repaired one back via saveFingerprintData.
             //
-            // A well-formed UA is still refreshed once Edge stable moves to a newer major: a real Edge
-            // auto-updates, a UA frozen for months doesn't. That is a browser update on the SAME
-            // device, so the userAgentData platformVersion/model are kept and no .bak is written
-            // (it would overwrite the pre-repair original every few weeks).
+            // A well-formed UA is still refreshed when its Edge major isn't the one to claim — current
+            // stable, capped at the real engine's major (see UserAgent.targetEdgeVersion). That is a
+            // browser update on the SAME device, so the userAgentData platformVersion/model are kept
+            // and no .bak is written (it would overwrite the pre-repair original every few weeks).
+            //
+            // Nothing is touched while the version to claim can't be determined (version service
+            // unreachable): regenerating then would fall back to an old pinned build.
             const savedUserAgent = fingerprint?.fingerprint?.navigator?.userAgent
             const repairReason = userAgentRefreshReason(savedUserAgent, isMobile)
+            const wantedMajor = await edgeMajorToClaim(isMobile)
             const reason = repairReason ?? await userAgentStaleReason(savedUserAgent, isMobile)
-            if (reason) {
+            if (reason && wantedMajor === null) {
+                log(isMobile, 'LOAD-FINGERPRINT', `Saved User-Agent needs a refresh (${reason}) but the version to claim can't be looked up right now; keeping it for this run`, 'warn')
+            } else if (reason) {
                 try {
                     // Work on a fresh copy so the saved fingerprint is untouched unless we accept the result.
                     const refreshed: BrowserFingerprintWithHeaders = await updateFingerprintUserAgent(JSON.parse(fingerprintData), isMobile, { keepDevice: !repairReason })
                     const refreshedUserAgent = refreshed.fingerprint.navigator.userAgent
-                    if (edgeMajorFromUserAgent(refreshedUserAgent) < edgeMajorFromUserAgent(savedUserAgent)) {
-                        // Version lookup fell back to the old pinned build — don't "repair" into a downgrade.
-                        log(isMobile, 'LOAD-FINGERPRINT', `Saved User-Agent needs a refresh (${reason}) but only an older version is available right now; keeping it for this run`, 'warn')
+                    if (edgeMajorFromUserAgent(refreshedUserAgent) !== wantedMajor) {
+                        log(isMobile, 'LOAD-FINGERPRINT', `Saved User-Agent needs a refresh (${reason}) but regenerating gave Edge ${edgeMajorFromUserAgent(refreshedUserAgent)} instead of ${wantedMajor}; keeping it for this run`, 'warn')
                     } else if (repairReason) {
                         log(isMobile, 'LOAD-FINGERPRINT', `Refreshing saved User-Agent (${reason}): "${savedUserAgent}" → "${refreshedUserAgent}"`, 'warn')
                         await fs.promises.copyFile(fingerprintFile, `${fingerprintFile}.bak`)

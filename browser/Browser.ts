@@ -1,12 +1,12 @@
-import { chromium, BrowserContext, Browser as PlaywrightBrowser } from 'rebrowser-playwright'
+import { chromium, BrowserContext, Browser as PlaywrightBrowser, Page } from 'rebrowser-playwright'
 
 import { newInjectedContext } from 'fingerprint-injector'
-import { FingerprintGenerator } from 'fingerprint-generator'
+import { BrowserFingerprintWithHeaders, FingerprintGenerator } from 'fingerprint-generator'
 
 import { MicrosoftRewardsBot } from '../src/index'
 import { loadSessionData, saveFingerprintData } from '../utils/Load'
-import { updateFingerprintUserAgent } from '../utils/UserAgent'
-import { GeoLanguageDetector, GeoLocation } from '../utils/GeoLanguage'
+import { setBrowserEngineVersion, updateFingerprintUserAgent } from '../utils/UserAgent'
+import { GeoLanguageDetector } from '../utils/GeoLanguage'
 
 import { AccountProxy } from '../interfaces/Account'
 
@@ -18,20 +18,15 @@ export interface ManagedBrowser {
     isMobile: boolean
 }
 
-// 定义浏览器上下文选项的类型
-interface BrowserContextOptions {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    fingerprint?: any // 第三方库的指纹类型，必须使用any以兼容外部库
-    viewport?: { width: number; height: number }
-    deviceScaleFactor?: number
-    isMobile?: boolean
-    hasTouch?: boolean
-    userAgent?: string
-    locale?: string
-    timezoneId?: string
-    permissions?: string[]
-    geolocation?: { latitude: number; longitude: number }
-    extraHTTPHeaders?: Record<string, string>
+// The part of a fingerprint's `screen` object the window geometry is derived from
+interface FingerprintScreen {
+    width: number
+    height: number
+    availWidth: number
+    availHeight: number
+    outerWidth: number
+    outerHeight: number
+    devicePixelRatio: number
 }
 
 /* Test Stuff
@@ -49,138 +44,102 @@ class Browser {
         this.bot = bot
     }
 
-    /**
-     * 根据地理位置获取浏览器配置
-     */
-    private async getGeoLocationConfig(proxy: AccountProxy): Promise<{
-        locale: string
-        timezoneId: string
-        geolocation: { latitude: number; longitude: number }
-        extraHTTPHeaders: Record<string, string>
-    }> {
+    /** Timezone of the IP the browser will appear from (through the account's proxy, if any). */
+    private async detectTimezone(proxy: AccountProxy): Promise<string> {
         try {
-            // 获取地理位置信息（包含真实的IP定位经纬度）
-            const location: GeoLocation = await GeoLanguageDetector.getCurrentLocation(proxy)
-            
-            // 根据国家代码获取语言设置
-            const localeMap: Record<string, string> = {
-                'JP': 'ja-JP',
-                'CN': 'zh-CN', 
-                'TW': 'zh-TW',
-                'HK': 'zh-HK',
-                'KR': 'ko-KR',
-                'VN': 'vi-VN',
-                'TH': 'th-TH',
-                'US': 'en-US',
-                'GB': 'en-GB',
-                'AU': 'en-AU',
-                'CA': 'en-CA',
-                'DE': 'de-DE',
-                'FR': 'fr-FR',
-                'ES': 'es-ES',
-                'IT': 'it-IT',
-                'BR': 'pt-BR',
-                'RU': 'ru-RU',
-                'IN': 'hi-IN',
-                'ID': 'id-ID',
-                'MY': 'ms-MY',
-                'PH': 'en-PH',
-                'SG': 'en-SG'
-            }
-
-            const locale = localeMap[location.countryCode] || 'en-US'
-            
-            // 使用真实的IP定位经纬度
-            const coordinates = {
-                latitude: location.latitude,
-                longitude: location.longitude
-            }
-
-            // 根据语言设置HTTP头部
-            const acceptLanguage = this.getAcceptLanguageHeader(location.language)
-            
-            this.bot.log(this.bot.isMobile, 'BROWSER-GEO', 
-                `Auto-detected location: ${location.country} (${location.countryCode}) | ` +
-                `Language: ${location.language} | Locale: ${locale} | ` +
-                `Timezone: ${location.timezone} | Real coordinates: ${coordinates.latitude}, ${coordinates.longitude} | ` +
-                `City: ${location.city}`)
-
-            return {
-                locale,
-                timezoneId: location.timezone,
-                geolocation: coordinates,
-                extraHTTPHeaders: {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': acceptLanguage,
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'Upgrade-Insecure-Requests': '1',
-                    ...(this.bot.isMobile && {
-                        'sec-ch-ua-mobile': '?1',
-                        'sec-ch-ua-platform': '"Android"'
-                    })
-                }
-            }
+            const location = await GeoLanguageDetector.getCurrentLocation(proxy)
+            this.bot.log(this.bot.isMobile, 'BROWSER-GEO', `Location: ${location.country} (${location.countryCode}), ${location.city} | timezone: ${location.timezone}`)
+            return location.timezone
         } catch (error) {
-            this.bot.log(this.bot.isMobile, 'BROWSER-GEO', 
-                `Failed to detect location, using default (Japan): ${error}`, 'warn')
-            
-            // 如果地理位置检测失败，返回默认的日本配置
-            return {
-                locale: 'ja-JP',
-                timezoneId: 'Asia/Tokyo',
-                geolocation: { latitude: 35.6762, longitude: 139.6503 },
-                extraHTTPHeaders: {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'Upgrade-Insecure-Requests': '1',
-                    ...(this.bot.isMobile && {
-                        'sec-ch-ua-mobile': '?1',
-                        'sec-ch-ua-platform': '"Android"'
-                    })
-                }
-            }
+            this.bot.log(this.bot.isMobile, 'BROWSER-GEO', `Failed to detect location, using default timezone (Asia/Tokyo): ${error}`, 'warn')
+            return 'Asia/Tokyo'
         }
     }
 
     /**
-     * 根据语言生成Accept-Language头部
+     * The real viewport (window.innerWidth/innerHeight) and device scale that agree with what the
+     * injected fingerprint reports for the screen and for window.outerWidth/outerHeight.
+     *
+     * fingerprint-injector's own default is a viewport of the full SCREEN size, while it reports the
+     * fingerprint's recorded (smaller) outer size: a page then sees innerWidth > outerWidth and a
+     * window as large as the monitor — impossible for a real browser. It also reports the
+     * fingerprint's devicePixelRatio without the page actually being rendered at that scale.
      */
-    private getAcceptLanguageHeader(language: string): string {
-        const languageHeaders: Record<string, string> = {
-            'ja': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
-            'zh-CN': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'zh-TW': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'zh-HK': 'zh-HK,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-            'ko': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-            'vi': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-            'th': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
-            'en': 'en-US,en;q=0.9',
-            'de': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-            'fr': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'es': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
-            'it': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-            'pt-BR': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'ru': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'hi': 'hi-IN,hi;q=0.9,en-US;q=0.8,en;q=0.7'
+    private windowGeometry(screen: FingerprintScreen): { viewport: { width: number, height: number }, deviceScaleFactor: number } {
+        const within = (value: number, max: number): boolean => value > 0 && value <= max
+        const availWidth = within(screen.availWidth, screen.width) ? screen.availWidth : screen.width
+        const availHeight = within(screen.availHeight, screen.height) ? screen.availHeight : screen.height
+        const outerWidth = within(screen.outerWidth, screen.width) ? screen.outerWidth : availWidth
+        const outerHeight = within(screen.outerHeight, screen.height) ? screen.outerHeight : availHeight
+        const deviceScaleFactor = screen.devicePixelRatio > 0 ? screen.devicePixelRatio : 1
+
+        if (this.bot.isMobile) {
+            // A mobile browser has no window frame: the page area is the window.
+            return { viewport: { width: outerWidth, height: outerHeight }, deviceScaleFactor }
         }
 
-        return languageHeaders[language] || 'en-US,en;q=0.9'
+        // Desktop Edge: tab strip + toolbar above the page (87 CSS px); a window that isn't maximised
+        // also has its frame (8 px left, right and bottom).
+        const windowed = outerWidth < availWidth
+        return {
+            viewport: {
+                width: Math.max(320, outerWidth - (windowed ? 16 : 0)),
+                height: Math.max(240, outerHeight - (windowed ? 95 : 87))
+            },
+            deviceScaleFactor
+        }
+    }
+
+    /**
+     * Give the browser itself the client-hint values the fingerprint claims (brands, full versions,
+     * platform version, model, ...). Without this Playwright derives them from the UA string alone, so
+     * when a site asks for them (Bing does, via Accept-CH) the request headers say e.g.
+     * platform-version "10.0" and model "" while navigator.userAgentData in the page says something
+     * else — and "10.0" is not a value any real Windows Edge sends.
+     */
+    private async applyClientHints(context: BrowserContext, page: Page, fingerprint: BrowserFingerprintWithHeaders): Promise<void> {
+        try {
+            const navigator = fingerprint.fingerprint.navigator
+            const data = navigator.userAgentData as unknown as {
+                brands: { brand: string, version: string }[]
+                fullVersionList: { brand: string, version: string }[]
+                platform: string
+                platformVersion: string
+                architecture: string
+                bitness: string
+                model: string
+            }
+            const session = await context.newCDPSession(page)
+            await session.send('Emulation.setUserAgentOverride', {
+                userAgent: navigator.userAgent,
+                acceptLanguage: fingerprint.headers['accept-language'],
+                platform: navigator.platform,
+                userAgentMetadata: {
+                    brands: data.brands,
+                    fullVersionList: data.fullVersionList,
+                    fullVersion: data.fullVersionList[0]?.version ?? '',
+                    platform: data.platform,
+                    platformVersion: data.platformVersion,
+                    architecture: data.architecture,
+                    bitness: data.bitness,
+                    model: data.model,
+                    mobile: this.bot.isMobile,
+                    wow64: false
+                }
+            })
+        } catch (error) {
+            this.bot.log(this.bot.isMobile, 'BROWSER', `Could not set client-hint metadata on a page: ${error}`, 'warn')
+        }
     }
 
     async createBrowser(proxy: AccountProxy, email: string): Promise<ManagedBrowser> {
-        // 获取地理位置配置
-        const geoConfig = await this.getGeoLocationConfig(proxy)
-
-        // 调试日志：确认headless配置
-        this.bot.log(this.bot.isMobile, 'BROWSER-DEBUG', `Headless mode from config: ${this.bot.config.headless}`)
+        const timezoneId = await this.detectTimezone(proxy)
 
         const browser = await chromium.launch({
-            //channel: 'msedge', // Uses Edge instead of chrome
+            // Headless runs use Chromium's NEW headless mode — the full browser without a window. The
+            // default headless is a separate, stripped-down "headless shell" binary and a page can
+            // tell: no window.chrome, no plugins / PDF viewer, Notification permission "denied".
+            ...(this.bot.config.headless && { channel: 'chromium' }),
             headless: this.bot.config.headless,
             ...(proxy.url && { proxy: { username: proxy.username, password: proxy.password, server: `${proxy.url}:${proxy.port}` } }),
             args: [
@@ -217,53 +176,46 @@ class Browser {
             ]
         })
 
+        // The UA may not claim a newer browser than the engine that is really running; both the
+        // saved-fingerprint check in loadSessionData and a fresh fingerprint depend on this.
+        setBrowserEngineVersion(browser.version())
+
         const sessionData = await loadSessionData(this.bot.config.sessionPath, email, this.bot.isMobile, this.bot.config.saveFingerprint)
 
         const fingerprint = sessionData.fingerprint ? sessionData.fingerprint : await this.generateFingerprint()
 
-        // 创建浏览器上下文，使用自动检测的地理位置配置
-        const baseContextOptions: BrowserContextOptions = { 
-            fingerprint: fingerprint,
-            locale: geoConfig.locale,
-            timezoneId: geoConfig.timezoneId,
-            geolocation: geoConfig.geolocation,
-            extraHTTPHeaders: geoConfig.extraHTTPHeaders
-        }
-
-        let contextOptions: BrowserContextOptions
-
-        // 关键修复：为移动端添加完整的移动设备配置
-        if (this.bot.isMobile) {
-            contextOptions = {
-                ...baseContextOptions,
-                viewport: { 
-                    width: 412, 
-                    height: 915 
-                }, // 标准移动端屏幕尺寸
-                deviceScaleFactor: 3, // 高分辨率移动设备
-                isMobile: true, // 关键：标识为移动设备
-                hasTouch: true, // 关键：启用触摸支持
-                userAgent: fingerprint.fingerprint.navigator.userAgent, // 确保使用移动端UA
-                permissions: ['geolocation'] // 移动端权限
+        // fingerprint-injector only reads `fingerprint` and `newContextOptions` — context options
+        // passed beside them (as this used to do with viewport, isMobile, hasTouch, timezone, ...) are
+        // silently dropped. The user agent comes from the fingerprint.
+        const { viewport, deviceScaleFactor } = this.windowGeometry(fingerprint.fingerprint.screen as FingerprintScreen)
+        //
+        // It also sends every header stored in the fingerprint on EVERY request. The full version list
+        // is a high-entropy hint a browser only sends to sites that asked for it, so it must not be in
+        // there; the browser sends it itself once applyClientHints has told it the values.
+        const injectedHeaders = { ...fingerprint.headers }
+        delete injectedHeaders['sec-ch-ua-full-version-list']
+        const context = await newInjectedContext(browser as PlaywrightBrowser, {
+            fingerprint: { ...fingerprint, headers: injectedHeaders },
+            newContextOptions: {
+                viewport,
+                deviceScaleFactor,
+                // so the device-width/device-height media queries agree with the injected window.screen
+                screen: { width: fingerprint.fingerprint.screen.width, height: fingerprint.fingerprint.screen.height },
+                timezoneId,
+                // Real touch + mobile viewport behaviour, to go with the fingerprint's maxTouchPoints
+                ...(this.bot.isMobile && { isMobile: true, hasTouch: true })
             }
-            
-            this.bot.log(this.bot.isMobile, 'BROWSER-MOBILE', 'Configuring browser with full mobile device simulation')
-            this.bot.log(this.bot.isMobile, 'BROWSER-MOBILE', 'Viewport: 412x915, Touch: enabled, Mobile: true')
-            this.bot.log(this.bot.isMobile, 'BROWSER-MOBILE', `Auto-detected locale: ${geoConfig.locale}, timezone: ${geoConfig.timezoneId}`)
-        } else {
-            // 桌面端配置
-            contextOptions = {
-                ...baseContextOptions,
-                viewport: { 
-                    width: 1920, 
-                    height: 1080 
-                }
-            }
-            
-            this.bot.log(this.bot.isMobile, 'BROWSER-DESKTOP', `Auto-detected locale: ${geoConfig.locale}, timezone: ${geoConfig.timezoneId}`)
-        }
+        })
 
-        const context = await newInjectedContext(browser as PlaywrightBrowser, contextOptions)
+        // Pages the bot opens get the client hints before they can navigate; pages a site opens
+        // (target=_blank) get them as soon as they exist.
+        const openPage = context.newPage.bind(context)
+        context.newPage = async (): Promise<Page> => {
+            const page = await openPage()
+            await this.applyClientHints(context, page, fingerprint)
+            return page
+        }
+        context.on('page', (page: Page) => { void this.applyClientHints(context, page, fingerprint) })
 
         // Per-action default timeout — deliberately short so a single hung selector/navigation
         // fails fast instead of blocking for the entire globalTimeout (the per-account run budget).
@@ -276,13 +228,8 @@ class Browser {
             await saveFingerprintData(this.bot.config.sessionPath, email, this.bot.isMobile, fingerprint)
         }
 
-        this.bot.log(this.bot.isMobile, 'BROWSER', `Created browser with User-Agent: "${fingerprint.fingerprint.navigator.userAgent}"`)
-        this.bot.log(this.bot.isMobile, 'BROWSER', `Location settings: ${geoConfig.locale} | ${geoConfig.timezoneId} | ${geoConfig.geolocation.latitude}, ${geoConfig.geolocation.longitude}`)
-
-        // 移动端额外验证日志
-        if (this.bot.isMobile) {
-            this.bot.log(this.bot.isMobile, 'BROWSER-MOBILE', 'Mobile browser features: Touch=✓, Mobile=✓, Viewport=412x915, Platform=Android')
-        }
+        this.bot.log(this.bot.isMobile, 'BROWSER', `Created browser (Chromium ${browser.version()}) with User-Agent: "${fingerprint.fingerprint.navigator.userAgent}"`)
+        this.bot.log(this.bot.isMobile, 'BROWSER', `Window: ${viewport.width}x${viewport.height} @${deviceScaleFactor}x${this.bot.isMobile ? ', touch' : ''} | timezone: ${timezoneId}`)
 
         // Anti-detection fingerprint is applied at the context level by newInjectedContext
         // (fingerprint-injector), covering every page in the context. No per-page stealth

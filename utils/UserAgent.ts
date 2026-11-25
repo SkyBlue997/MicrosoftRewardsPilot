@@ -12,6 +12,18 @@ const NOT_A_BRAND_VERSION = '99'
 // is impossible on a genuine browser and a clean automation tell.
 const GREASE_BRAND = 'Not/A)Brand'
 
+// The Chromium major of the browser binary the bot actually drives, reported by Browser.createBrowser
+// right after launch. The UA must never claim a NEWER version than this: a page can test for JS
+// features that version is guaranteed to have, and a "158" lacking them is a flat contradiction
+// (the bundled Chromium 129 used to claim Edge 158). An Edge a few releases behind stable is merely
+// one that hasn't been updated — keeping it current is done by upgrading rebrowser-playwright.
+let engineMajor: number | null = null
+
+export function setBrowserEngineVersion(version: string): void {
+    const major = parseInt(version, 10)
+    engineMajor = Number.isFinite(major) && major > 0 ? major : null
+}
+
 export async function getUserAgent(isMobile: boolean) {
     const system = getSystemComponents(isMobile)
     const app = await getAppComponents(isMobile)
@@ -24,10 +36,12 @@ export async function getUserAgent(isMobile: boolean) {
         `Mozilla/5.0 (Linux; ${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Mobile Safari/537.36 EdgA/${app.edge_reduced_version}` :
         `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${app.chrome_reduced_version} Safari/537.36 Edg/${app.edge_reduced_version}`
 
-    const platformVersion = device ? `${device.androidMajorVersion}.0.0` : `${Math.floor(Math.random() * 15) + 1}.0.0`
+    const platformVersion = device ? `${device.androidMajorVersion}.0.0` : randomWindowsPlatformVersion()
 
     const uaMetadata = {
-        isMobile,
+        // `mobile` is the NavigatorUAData property name (this object is what pages read back); it
+        // used to be `isMobile`, leaving navigator.userAgentData.mobile undefined.
+        mobile: isMobile,
         platform: isMobile ? 'Android' : 'Windows',
         // Order mirrors a real Edge client (Edge, GREASE, Chromium); the sec-ch-ua* headers are
         // derived from these same arrays in updateFingerprintUserAgent so JS and headers always agree.
@@ -44,10 +58,22 @@ export async function getUserAgent(isMobile: boolean) {
         platformVersion,
         architecture: isMobile ? '' : 'x86',
         bitness: isMobile ? '' : '64',
-        model: device ? device.model : ''
+        model: device ? device.model : '',
+        uaFullVersion: app['edge_version'],
+        wow64: false
     }
 
     return { userAgent: uaTemplate, userAgentMetadata: uaMetadata }
+}
+
+// navigator.userAgentData platformVersion values of the Windows releases a current Edge runs on:
+// 10.0.0 = Windows 10 22H2, 15.0.0 = Windows 11 22H2/23H2, 19.0.0 = Windows 11 24H2. (This used to be
+// a random 1–15: 1–9 are Windows 10 builds from 2015–2020 that no current Edge supports, and 11/12
+// are not Windows versions at all.)
+const WINDOWS_PLATFORM_VERSIONS = ['10.0.0', '15.0.0', '19.0.0']
+
+function randomWindowsPlatformVersion(): string {
+    return WINDOWS_PLATFORM_VERSIONS[Math.floor(Math.random() * WINDOWS_PLATFORM_VERSIONS.length)] as string
 }
 
 // Pairs with FALLBACK_EDGE_VERSIONS below (same major), so the all-offline path is still consistent.
@@ -87,35 +113,98 @@ export async function getChromiumVersion(major: string, isMobile: boolean): Prom
 
 const FALLBACK_EDGE_VERSIONS = { android: '131.0.2903.87', windows: '131.0.2903.86' }
 
-// One successful lookup per process (= per run): the saved-UA staleness check, a refresh and the
-// desktop + mobile browsers of the same run would otherwise each hit the endpoint again.
-let edgeVersionsCache: { android: string, windows: string } | null = null
+// One successful lookup per process (= per run): the saved-UA check, a refresh and the desktop +
+// mobile browsers of the same run would otherwise each hit the endpoints again.
+let edgeStableCache: { android: string, windows: string } | null = null
+const edgeBuildByMajorCache = new Map<number, string>()
 
-export async function getEdgeVersions(isMobile: boolean) {
-    if (edgeVersionsCache) {
-        return edgeVersionsCache
-    }
+async function fetchEdgeReleases(view: string, isMobile: boolean): Promise<EdgeVersion['Releases'] | null> {
     try {
         const response = await axios({
-            url: 'https://edgeupdates.microsoft.com/api/products',
+            url: `https://edgeupdates.microsoft.com/api/products${view}`,
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
             timeout: 10000
         })
         const data: EdgeVersion[] = response.data
-        const stable = data.find(x => x.Product == 'Stable')
-        if (stable) {
-            edgeVersionsCache = {
-                android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.android,
-                windows: stable.Releases.find(x => (x.Platform == 'Windows' && x.Architecture == 'x64'))?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.windows
-            }
-            return edgeVersionsCache
-        }
+        return data.find(x => x.Product == 'Stable')?.Releases ?? null
     } catch (error) {
         log(isMobile, 'USERAGENT-EDGE-VERSION', `Failed to fetch Edge versions: ${error}`, 'warn')
+        return null
+    }
+}
+
+/** Current stable Edge per platform, or null when the version service can't be reached. */
+async function fetchEdgeStable(isMobile: boolean): Promise<{ android: string, windows: string } | null> {
+    if (edgeStableCache) {
+        return edgeStableCache
+    }
+    const releases = await fetchEdgeReleases('', isMobile)
+    const windows = releases?.find(x => (x.Platform == 'Windows' && x.Architecture == 'x64'))?.ProductVersion
+    if (!windows) {
+        return null
+    }
+    edgeStableCache = { android: releases?.find(x => x.Platform == 'Android')?.ProductVersion ?? windows, windows }
+    return edgeStableCache
+}
+
+export async function getEdgeVersions(isMobile: boolean) {
+    const stable = await fetchEdgeStable(isMobile)
+    if (stable) {
+        return stable
     }
     log(isMobile, 'USERAGENT-EDGE-VERSION', 'Falling back to pinned Edge versions', 'warn')
     return FALLBACK_EDGE_VERSIONS
+}
+
+/** The last stable build Microsoft shipped for an Edge major (enterprise release history), or null. */
+async function fetchEdgeBuildForMajor(major: number, isMobile: boolean): Promise<string | null> {
+    const cached = edgeBuildByMajorCache.get(major)
+    if (cached) {
+        return cached
+    }
+    const numeric = (version: string): number[] => version.split('.').map(Number)
+    const releases = await fetchEdgeReleases('?view=enterprise', isMobile)
+    const latest = (releases ?? [])
+        .filter(x => x.Platform == 'Windows' && x.Architecture == 'x64' && parseInt(x.ProductVersion, 10) === major)
+        .map(x => x.ProductVersion)
+        .sort((a, b) => {
+            const [x, y] = [numeric(a), numeric(b)]
+            for (let i = 0; i < 4; i++) {
+                if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0)
+            }
+            return 0
+        })
+        .pop()
+    if (!latest) {
+        return null
+    }
+    edgeBuildByMajorCache.set(major, latest)
+    return latest
+}
+
+/**
+ * The Edge version this browser should claim: current stable, capped at the engine's real major
+ * (see setBrowserEngineVersion). Null when it can't be determined right now. For a capped major the
+ * last real build of that major is used; Android builds of past majors aren't published, so the
+ * Windows build of the same major stands in for EdgA.
+ */
+export async function targetEdgeVersion(isMobile: boolean): Promise<string | null> {
+    const stable = await fetchEdgeStable(isMobile)
+    if (!stable) {
+        return null
+    }
+    const current = isMobile ? stable.android : stable.windows
+    if (engineMajor === null || parseInt(current, 10) <= engineMajor) {
+        return current
+    }
+    return await fetchEdgeBuildForMajor(engineMajor, isMobile)
+}
+
+/** Major of targetEdgeVersion, or null when it can't be determined right now. */
+export async function edgeMajorToClaim(isMobile: boolean): Promise<number | null> {
+    const target = await targetEdgeVersion(isMobile)
+    return target ? parseInt(target, 10) : null
 }
 
 // Chromium User-Agent reduction (shipped in Chrome/Edge for Android since ~v110) freezes the UA's OS
@@ -198,7 +287,7 @@ export function isWellFormedMobileUserAgent(userAgent: string | undefined): bool
 
 export async function getAppComponents(isMobile: boolean) {
     const versions = await getEdgeVersions(isMobile)
-    const edgeVersion = isMobile ? versions.android : versions.windows
+    const edgeVersion = (await targetEdgeVersion(isMobile)) ?? (isMobile ? versions.android : versions.windows)
     const edgeMajorVersion = edgeVersion.split('.')[0] as string
     // Edge's major decides everything: Chromium is looked up for that milestone, and both UA tokens
     // are reduced to <major>.0.0.0.
@@ -239,16 +328,19 @@ export function userAgentRefreshReason(userAgent: string | undefined, isMobile: 
 }
 
 /**
- * Reason when a saved UA's Edge major is behind the current stable Edge, else null. Real Edge
- * auto-updates roughly every four weeks, so a saved UA frozen on one major for months stands out.
- * A failed lookup falls back to an old pinned version, which is never newer — so nothing is
- * refreshed while the version service is unreachable.
+ * Reason when a saved UA's Edge major is not the one to claim (see targetEdgeVersion), else null:
+ * behind it — a real Edge auto-updates roughly every four weeks, a UA frozen for months stands out —
+ * or ahead of what the engine can back up. Null as well when the target can't be determined.
  */
 export async function userAgentStaleReason(userAgent: string | undefined, isMobile: boolean): Promise<string | null> {
+    const wanted = await edgeMajorToClaim(isMobile)
+    if (wanted === null) {
+        return null
+    }
     const saved = edgeMajorFromUserAgent(userAgent)
-    const versions = await getEdgeVersions(isMobile)
-    const current = Number((isMobile ? versions.android : versions.windows).split('.')[0])
-    return current > saved ? `Edge ${saved} is behind current stable ${current}` : null
+    if (saved < wanted) return `Edge ${saved} is behind ${wanted}`
+    if (saved > wanted) return `claims Edge ${saved} but the browser engine is Chromium ${engineMajor}`
+    return null
 }
 
 /**
@@ -261,7 +353,9 @@ export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprint
         const userAgentData = await getUserAgent(isMobile)
 
         const previous = fingerprint.fingerprint.navigator.userAgentData as { platformVersion?: string, model?: string } | undefined
-        if (options.keepDevice && previous?.platformVersion) {
+        // Same device → same OS. (A saved Windows value no current Edge runs on is not carried over.)
+        const previousIsPlausible = isMobile || WINDOWS_PLATFORM_VERSIONS.includes(previous?.platformVersion ?? '')
+        if (options.keepDevice && previous?.platformVersion && previousIsPlausible) {
             userAgentData.userAgentMetadata.platformVersion = previous.platformVersion
             userAgentData.userAgentMetadata.model = previous.model ?? ''
         }
