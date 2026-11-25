@@ -50,7 +50,11 @@ COPY scripts/crontab.template /etc/cron.d/microsoftrewardspilot-cron.template
 # Create the log file to be able to run tail
 RUN touch /var/log/cron.log
 
-# Define the command to run your application with cron optionally
+# Define the command to run your application with cron optionally.
+# The container's lifetime must not depend on the optional startup run: the previous
+# `([ "$RUN_ON_START" = "true" ] && npm start) && tail -f ...` made PID 1 exit at once when
+# RUN_ON_START was not "true" (or when the startup run exited non-zero), which under
+# `restart: unless-stopped` is a restart loop.
 CMD ["sh", "-c", "echo \"$TZ\" > /etc/timezone && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
@@ -58,5 +62,5 @@ CMD ["sh", "-c", "echo \"$TZ\" > /etc/timezone && \
     chmod 0644 /etc/cron.d/microsoftrewardspilot-cron && \
     crontab /etc/cron.d/microsoftrewardspilot-cron && \
     cron -f & \
-    ([ \"$RUN_ON_START\" = \"true\" ] && npm start) && \
+    if [ \"$RUN_ON_START\" = \"true\" ]; then npm start; fi; \
     tail -f /var/log/cron.log"]

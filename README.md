@@ -87,8 +87,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Asia/Tokyo  # 根据地理位置设置
-      - CRON_SCHEDULE=0 9,16 * * *  # 建议改成不那么"整点"的分散时间，避免每天同一时刻扎堆；run_daily.sh 还会再叠加 3-85 分钟随机抖动
-      - RUN_ON_START=true  # 容器启动时立即跑一次
+      - CRON_SCHEDULE=0 9,16,21 * * *  # 建议改成不那么"整点"的分散时间，避免每天同一时刻扎堆；run_daily.sh 还会再叠加 3-85 分钟随机抖动
+      - RUN_ON_START=false  # 保持 false：否则容器每次启动（Docker/电脑重启）都会立刻跑一轮，重启常常连续发生，会造成短时间内多次登录
       # 反检测：启用 rebrowser 的 Runtime.enable 修复（src/rebrowser-env.ts 已内置默认值，这里显式声明便于覆盖）
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util

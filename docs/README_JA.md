@@ -87,8 +87,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Asia/Tokyo  # 地理的位置に応じて設定
-      - CRON_SCHEDULE=0 9,16 * * *  # 「ちょうどの時刻」を避け、奇数・非整数・分散した時間に変更することを推奨（毎日同じ時刻に集中させない）。run_daily.sh がさらに 3〜85 分のランダムなジッターを上乗せします
-      - RUN_ON_START=true  # コンテナ起動時に即座に1回実行
+      - CRON_SCHEDULE=0 9,16,21 * * *  # 「ちょうどの時刻」を避け、奇数・非整数・分散した時間に変更することを推奨（毎日同じ時刻に集中させない）。run_daily.sh がさらに 3〜85 分のランダムなジッターを上乗せします
+      - RUN_ON_START=false  # false のままに：true だとコンテナ起動（Docker/ホストの再起動）のたびに即実行され、再起動が連続すると短時間に複数回サインインしてしまう
       # 反検出：rebrowser の Runtime.enable 修正を有効化（src/rebrowser-env.ts にデフォルト値が組み込み済み。ここで明示すると上書きできて便利）
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util

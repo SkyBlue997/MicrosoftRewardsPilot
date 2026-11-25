@@ -87,8 +87,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Asia/Tokyo  # Set according to geographic location
-      - CRON_SCHEDULE=0 9,16 * * *  # Prefer odd / non-round / spread-out hours instead of 9,16, to avoid hitting the same instant every day; run_daily.sh additionally layers on 3-85 min of random jitter
-      - RUN_ON_START=true  # Run once immediately on container startup
+      - CRON_SCHEDULE=0 9,16,21 * * *  # Prefer odd / non-round / spread-out hours instead of 9,16, to avoid hitting the same instant every day; run_daily.sh additionally layers on 3-85 min of random jitter
+      - RUN_ON_START=false  # Keep false: otherwise every container start (Docker/host restart) runs the bot immediately, and restarts come in bursts — several sign-ins within minutes
       # Anti-detection: enable rebrowser's Runtime.enable fix (src/rebrowser-env.ts already ships defaults; declared explicitly here for easy override)
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
