@@ -1,22 +1,41 @@
-import { Page } from 'rebrowser-playwright'
+import { Frame, Page } from 'rebrowser-playwright'
 
-import { RewardsApi, ApiPromotion } from './RewardsApi'
+import { RewardsApi } from './RewardsApi'
 import { HumanBehaviorSimulator } from '../anti-detection/human-behavior'
 import { MicrosoftRewardsBot } from '../index'
 
+interface ExploreCard {
+    title: string
+    description: string
+    points: number
+    locked: boolean
+    complete: boolean
+}
+
 /**
- * Earns the "Explore on Bing" offers (the "在必应上浏览" cards, offerids like
- * `ENUS_<category>_exploreonbing_*`). These are NOT claimable via the activities API and visiting the
- * destination alone does nothing — verified mechanism: land on Bing through the offer's flyout URL
- * (`...&rwAutoFlyout=exb`) and then run a category-relevant Bing search in that same tab; the offer
- * flips complete=True and credits (typically +10).
+ * Earns the "Explore on Bing" offers (+10 each) the way a member does, through the Rewards panel
+ * ("flyout") on bing.com. Verified mechanism:
+ *   1. Open the flyout and CLICK the offer's card in its "Explore on Bing" checklist. That click
+ *      activates the offer (POST /msrewards/api/v1/reportactivity, ActivityType "bingredirect";
+ *      the panel then says "Activated! Search on Bing to complete this activity").
+ *   2. Run a Bing search on the offer's topic. The offer completes: its card stays in the checklist
+ *      but switches to the completed style ("10 Points added to the account").
+ * A topic search WITHOUT step 1 does not credit (tested side by side) — which is why the previous
+ * version, which only searched, mostly reported "not credited".
  *
- * Only offers that are unlocked, not yet complete, and worth points (max > 0) are attempted; the
- * many `max:-1` engagement cards are skipped. These searches also count toward the daily PC search
- * cap, so running this before SearchRunner is efficient (no extra searches beyond what's needed).
+ * The flyout is also the only reliable list of what is earnable today. The dapi promotions list
+ * (what this class used to read) is not: it showed a different set of unlocked explore offers than
+ * the flyout — offers the flyout did not have at all — and changed between consecutive calls.
+ * Locked ("Available tomorrow"), point-less and already-completed cards are skipped.
  */
 export class ExploreRunner {
+    // The address every Explore-on-Bing card points at: the Bing homepage with the Rewards panel.
+    private static readonly FLYOUT_URL = 'https://www.bing.com/?form=ML2PCR&OCID=ML2PCR&PUBL=RewardsDO&CREA=ML2PCR&PC=ML2PCR&rwAutoFlyout=exb'
+    private static readonly CHECKLIST = '#exb-activityChecklist'
+    private static readonly MAX_OFFERS_PER_RUN = 4
+
     private human = new HumanBehaviorSimulator()
+    private flyout: Frame | null = null
 
     constructor(private bot: MicrosoftRewardsBot, private api: RewardsApi, private page: Page) {}
 
@@ -24,93 +43,142 @@ export class ExploreRunner {
         this.bot.log(this.bot.isMobile, 'EXPLORE', message, type, color)
     }
 
-    /** Natural, category-matched Bing queries (the offers are ENUS, so English queries fit their intent). */
-    private static readonly CATEGORY_QUERIES: Record<string, string[]> = {
-        jewelry: ['diamond necklace gift ideas', 'engagement ring styles'],
-        insurance: ['best car insurance quotes', 'home insurance plans compare'],
-        mattress: ['best mattress reviews', 'memory foam mattress deals'],
-        petsupplies: ['dog food and pet supplies', 'cat toys and accessories'],
-        creditreport: ['check my credit score free', 'how to read a credit report'],
-        weather: ['weather forecast this week', 'weekend weather near me'],
-        hotel: ['hotel deals near me', 'cheap hotel booking'],
-        realestate: ['houses for sale near me', 'homes for sale listings'],
-        sports: ['latest sports scores', 'sports news today'],
-        flight: ['cheap flight deals', 'flight tickets compare'],
-        personalloan: ['compare personal loan rates', 'best personal loans'],
-        shopping: ['online shopping deals today', 'best shopping offers'],
-        cellphoneplans: ['best cell phone plans', 'unlimited data plans compare'],
-        cruises: ['cruise vacation deals', 'caribbean cruise packages'],
-        internetproviders: ['best internet providers near me', 'home internet deals'],
-        travel: ['travel destinations ideas', 'vacation packages deals'],
-        gardening: ['gardening tips for beginners', 'best plants for a garden'],
-        fitness: ['home fitness workout plans', 'best exercises for beginners']
-    }
-
-    private categoryOf(offerId: string): string | null {
-        const m = /_([a-z]+)_exploreonbing/i.exec(offerId || '')
-        return m && m[1] ? m[1].toLowerCase() : null
-    }
-
-    /** Earn every currently-earnable Explore-on-Bing offer. */
+    /** Earn every Explore-on-Bing offer the flyout lists as available today. */
     async run(): Promise<{ earned: number }> {
-        let data
-        try {
-            data = await this.api.getData()
-        } catch (error) {
-            this.log(`Failed to fetch data: ${error}`, 'warn')
+        let cards = await this.readChecklist()
+        if (!cards) {
+            this.log('Rewards panel did not open on bing.com — skipping Explore-on-Bing', 'warn')
             return { earned: 0 }
         }
-
-        const offers = data.promotions.filter(p =>
-            /exploreonbing/i.test(p.offerId) &&
-            p.attributes.is_unlocked === 'True' &&
-            !p.complete &&
-            p.max > 0
-        )
-        if (!offers.length) {
+        const earnable = (list: ExploreCard[]): ExploreCard[] => list.filter(c => !c.locked && !c.complete && c.points > 0)
+        if (!earnable(cards).length) {
             this.log('No earnable Explore-on-Bing offers right now')
             return { earned: 0 }
         }
-        this.log(`${offers.length} Explore-on-Bing offer(s) to earn`)
+        this.log(`${earnable(cards).length} Explore-on-Bing offer(s) to earn`)
 
+        const startBalance = await this.api.getData().then(d => d.balance).catch(() => null)
+        const tried = new Set<string>()
         let earned = 0
-        for (const offer of offers) {
+
+        while (tried.size < ExploreRunner.MAX_OFFERS_PER_RUN) {
+            const card = earnable(cards).find(c => !tried.has(c.title))
+            if (!card) break
+            tried.add(card.title)
+
             try {
-                const ok = await this.earnOne(offer)
-                if (ok) {
-                    earned += offer.max
-                    this.log(`✅ "${offer.title}" (+${offer.max})`, 'log', 'green')
-                } else {
-                    this.log(`• "${offer.title}" not credited (mechanism may have changed)`, 'warn')
-                }
+                await this.activateAndSearch(card)
             } catch (error) {
-                this.log(`❌ "${offer.title}": ${error}`, 'warn')
+                this.log(`❌ "${card.title}": ${error}`, 'warn')
             }
             // human spacing between offers
             await this.bot.utils.wait(this.bot.utils.randomNumber(8000, 20000))
+
+            // Re-reading the checklist is both the confirmation for this offer (its card now shows the
+            // completed style) and the list for the next one.
+            const reread = await this.readChecklist()
+            if (!reread) {
+                this.log(`Could not re-open the Rewards panel to confirm "${card.title}"`, 'warn')
+                break
+            }
+            if (reread.some(c => c.title === card.title && c.complete)) {
+                earned += card.points
+                this.log(`✅ "${card.title}" (+${card.points})`, 'log', 'green')
+            } else {
+                this.log(`• "${card.title}" not credited (its card is not marked complete after activating and searching)`, 'warn')
+            }
+            cards = reread
         }
 
-        this.log(`Explore-on-Bing done — ~+${earned} this run`, 'log', 'green')
+        const endBalance = await this.api.getData().then(d => d.balance).catch(() => null)
+        const balances = startBalance !== null && endBalance !== null ? ` (balance ${startBalance} → ${endBalance})` : ''
+        this.log(`Explore-on-Bing done — +${earned} this run${balances}`, 'log', 'green')
         return { earned }
     }
 
-    /** Land on Bing via the offer's flyout URL, then run the category search(es) until it credits. */
-    private async earnOne(offer: ApiPromotion): Promise<boolean> {
-        const cat = this.categoryOf(offer.offerId)
-        const queries = (cat && ExploreRunner.CATEGORY_QUERIES[cat]) || ['top stories today', 'news near me']
+    /**
+     * Open bing.com with the Rewards panel and read every card of its Explore-on-Bing checklist.
+     * Returns null when the panel could not be opened, [] when it has no checklist.
+     */
+    private async readChecklist(): Promise<ExploreCard[] | null> {
+        this.flyout = null
+        await this.page.goto(ExploreRunner.FLYOUT_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {})
+        await this.bot.utils.wait(this.bot.utils.randomNumber(3500, 6000))
 
-        const dest = offer.destination || 'https://www.bing.com/?form=ML2PCR&OCID=ML2PCR&PUBL=RewardsDO&rwAutoFlyout=exb'
-        await this.page.goto(dest, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {})
-        await this.bot.utils.wait(this.bot.utils.randomNumber(3000, 6000))
+        const findFlyout = (): Frame | null => this.page.frames().find(f => f.url().includes('/rewards/panelflyout')) ?? null
 
-        for (const query of queries) {
-            await this.searchInTab(query)
-            // Re-check: the offer flips complete=True once the qualifying search registers.
-            const updated = await this.findOffer(offer.offerId)
-            if (updated && updated.complete) return true
+        // rwAutoFlyout=exb opens the panel by itself in some sessions; otherwise open it from the
+        // points medallion like a visitor would (clicking when it is already open would close it).
+        let flyout = findFlyout()
+        if (!flyout) {
+            const medallion = await this.page.waitForSelector('#rh_rwm, #id_rh_w', { state: 'visible', timeout: 10000 }).catch(() => null)
+            if (!medallion) return null
+            await medallion.click().catch(() => {})
+            for (let i = 0; i < 20 && !flyout; i++) {
+                await this.bot.utils.wait(500)
+                flyout = findFlyout()
+            }
         }
-        const final = await this.findOffer(offer.offerId)
-        return !!(final && final.complete)
+        if (!flyout) return null
+
+        // The panel renders its sections client-side; give the checklist time to appear.
+        const checklist = await flyout.waitForSelector(ExploreRunner.CHECKLIST, { state: 'attached', timeout: 12000 }).catch(() => null)
+        this.flyout = flyout
+        if (!checklist) return []
+
+        const cards = await flyout.evaluate((selector: string) => {
+            const out: { title: string, description: string, points: number, locked: boolean, complete: boolean }[] = []
+            document.querySelectorAll(`${selector} a.block`).forEach(card => {
+                const text = (query: string): string => (card.querySelector(query)?.textContent || '').replace(/\u200b/g, '').trim()
+                out.push({
+                    title: text('.promo-title'),
+                    description: text('.promo-desc'),
+                    points: parseInt(text('.point_cont .point'), 10) || 0,
+                    locked: !!card.querySelector('.locked_overlay, .locked_level_required_text') || (card.getAttribute('href') || '').startsWith('javascript'),
+                    // a finished card keeps its place but loses its description and gains this marker
+                    complete: !!card.querySelector('.pc.complete')
+                })
+            })
+            return out
+        }, ExploreRunner.CHECKLIST).catch(() => [])
+
+        return cards.filter(c => c.title)
+    }
+
+    /** Click the card in the open flyout (activates the offer), then search its topic in this tab. */
+    private async activateAndSearch(card: ExploreCard): Promise<void> {
+        const query = this.queryFor(card)
+        if (!this.flyout || !query) {
+            throw new Error('no panel or no search topic for this card')
+        }
+
+        const cardLink = this.flyout.locator(`${ExploreRunner.CHECKLIST} a.block`).filter({ hasText: card.title }).first()
+        const activation = this.page.waitForResponse(
+            response => response.url().includes('/msrewards/api/v1/reportactivity') && (response.request().postData() || '').includes('exploreonbing'),
+            { timeout: 10000 }
+        ).catch(() => null)
+        // The card opens the Bing homepage in a new tab; the search is done in this one instead.
+        const newTab = this.page.context().waitForEvent('page', { timeout: 6000 }).catch(() => null)
+
+        await cardLink.scrollIntoViewIfNeeded().catch(() => {})
+        await this.bot.utils.wait(this.bot.utils.randomNumber(600, 1800))
+        // The pointer click is sometimes swallowed inside the panel's frame; the DOM click runs the
+        // same handler.
+        await cardLink.click({ timeout: 4000 }).catch(() => cardLink.evaluate(element => (element as HTMLElement).click()))
+
+        if (!(await activation)) {
+            this.log(`"${card.title}": no activation request seen after clicking its card`, 'warn')
+        }
+        const opened = await newTab
+        if (opened) await opened.close().catch(() => {})
+        await this.bot.utils.wait(this.bot.utils.randomNumber(2000, 4500))
+
+        await this.searchInTab(query)
+    }
+
+    /** The card says what to search: "Search on Bing to compare checking and savings account options". */
+    private queryFor(card: ExploreCard): string {
+        return card.description.replace(/^search (on|with) bing\s+(to|for)\s+/i, '').replace(/[.!]+$/, '').trim()
     }
 
     private async searchInTab(query: string): Promise<void> {
@@ -122,17 +190,14 @@ export class ExploreRunner {
             await this.human.humanType(this.page, query)
             await this.bot.utils.wait(this.bot.utils.randomNumber(300, 1000))
             await this.page.keyboard.press('Enter')
-        } else {
-            // Fallback: keep the rewards form code on the query URL so the search still ties to the flyout.
-            await this.page.goto(`https://www.bing.com/search?q=${encodeURIComponent(query)}&form=ML2PCR`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
+            await this.page.waitForURL(/\/search\?/, { timeout: 15000 }).catch(() => {})
+        }
+        if (!this.page.url().includes('/search?')) {
+            // The box was missing or covered: run the same query by address instead.
+            await this.page.goto(`https://www.bing.com/search?q=${encodeURIComponent(query)}&form=QBLH`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
         }
         await this.page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {})
         await this.human.humanScroll(this.page, 'down').catch(() => {})
         await this.bot.utils.wait(this.bot.utils.randomNumber(2500, 5000))
-    }
-
-    private async findOffer(offerId: string): Promise<ApiPromotion | undefined> {
-        const data = await this.api.getData()
-        return data.promotions.find(p => p.offerId === offerId)
     }
 }
