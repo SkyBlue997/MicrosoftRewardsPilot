@@ -1,10 +1,23 @@
-import { randomBytes } from 'crypto'
+import { randomUUID } from 'crypto'
 import { AxiosRequestConfig } from 'axios'
 
 import { GeoLanguageDetector } from '../../utils/GeoLanguage'
+import { getEdgeVersions } from '../../utils/UserAgent'
 import { MicrosoftRewardsBot } from '../index'
 
 const DAPI_BASE = 'https://prod.rewardsplatform.microsoft.com/dapi'
+
+// This API (channel SAAndroid) is the Bing mobile app's. These requests used to go out as a bare
+// Node client — `User-Agent: axios/1.9.0`, no app headers — on every read and every claim. The header
+// set below is the one a capture of the real app's dapi requests shows (iOS build 33.5.440612003:
+// X-Rewards-AppId "SAIOS/<version>", X-Rewards-PartnerId "startapp", X-Rewards-Flights "rwgobig", an
+// EMPTY X-Rewards-IsMobile, Accept "*/*", a plain mobile-browser User-Agent, UUID activity ids),
+// transposed to the Android app the OAuth token belongs to. No Android capture exists, so the
+// Android specifics (the "SAAndroid/<version>" form, the Chrome-on-Android UA) are by analogy.
+//
+// The version is a real Play Store release of com.microsoft.bing (arm64 build of 2026-11-19); the app
+// ships about weekly, so override it with REWARDS_APP_VERSION instead of letting it age for months.
+const APP_VERSION = process.env.REWARDS_APP_VERSION || '34.5.441112006'
 
 /**
  * A single Rewards promotion/activity from the new (2026) rewards.bing.com API.
@@ -42,16 +55,31 @@ export interface RewardsData {
  * obtained by Login.getMobileAccessToken().
  */
 export class RewardsApi {
+    private userAgent: string | null = null
+
     constructor(private bot: MicrosoftRewardsBot, private accessToken: string, private country: string = 'us') {}
 
-    private headers(json = false): Record<string, string> {
+    private async headers(json = false): Promise<Record<string, string>> {
+        if (!this.userAgent) {
+            // Chrome on Android at the current stable major (Edge and Chrome share it), UA-reduced.
+            const major = (await getEdgeVersions(true)).android.split('.')[0]
+            this.userAgent = `Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`
+        }
+        // Match the account's real market instead of always claiming English (country said jp while
+        // language said en). Verified safe: en/ja/ja-JP all return identical promotions — only the
+        // response titles localize. getLanguageFromCountry falls back to 'en' for unknown markets.
+        const language = GeoLanguageDetector.getLanguageFromCountry((this.country || 'us').toUpperCase())
         const h: Record<string, string> = {
             'Authorization': `Bearer ${this.accessToken}`,
+            'Accept': '*/*',
+            'Accept-Language': language === 'en' ? 'en-US,en;q=0.9' : `${language},en-US;q=0.8,en;q=0.7`,
+            'User-Agent': this.userAgent,
+            'X-Rewards-AppId': `SAAndroid/${APP_VERSION}`,
             'X-Rewards-Country': this.country,
-            // Match the account's real market instead of always claiming English (country said jp while
-            // language said en). Verified safe: en/ja/ja-JP all return identical promotions — only the
-            // response titles localize. getLanguageFromCountry falls back to 'en' for unknown markets.
-            'X-Rewards-Language': GeoLanguageDetector.getLanguageFromCountry((this.country || 'us').toUpperCase())
+            'X-Rewards-Flights': 'rwgobig',
+            'X-Rewards-IsMobile': '',
+            'X-Rewards-Language': language,
+            'X-Rewards-PartnerId': 'startapp'
         }
         if (json) h['Content-Type'] = 'application/json'
         return h
@@ -62,7 +90,7 @@ export class RewardsApi {
         const req: AxiosRequestConfig = {
             url: `${DAPI_BASE}/me?channel=SAAndroid&options=511`,
             method: 'GET',
-            headers: this.headers()
+            headers: await this.headers()
         }
         const response = await this.bot.axios.request(req)
         const r = (response.data && response.data.response) || {}
@@ -102,14 +130,14 @@ export class RewardsApi {
         const payload = {
             amount: 1,
             country: this.country,
-            id: randomBytes(32).toString('hex'),
+            id: randomUUID(), // the app's activity ids are UUIDs (this used to be 64 hex characters)
             type: 101,
             attributes: { offerid: offerId }
         }
         const req: AxiosRequestConfig = {
             url: `${DAPI_BASE}/me/activities`,
             method: 'POST',
-            headers: this.headers(true),
+            headers: await this.headers(true),
             data: JSON.stringify(payload)
         }
         const response = await this.bot.axios.request(req)
@@ -128,17 +156,16 @@ export class RewardsApi {
         const payload = {
             amount: 1,
             country: this.country,
-            id: randomBytes(32).toString('hex'),
+            id: randomUUID(),
             type: 103,
             channel: 'SAAndroid',
             attributes: {},
             risk_context: {}
         }
-        const headers = { ...this.headers(true), 'X-Rewards-AppId': 'SAAndroid', 'X-Rewards-PartnerId': 'startapp' }
         const req: AxiosRequestConfig = {
             url: `${DAPI_BASE}/me/activities`,
             method: 'POST',
-            headers,
+            headers: await this.headers(true),
             data: JSON.stringify(payload)
         }
         const response = await this.bot.axios.request(req)
