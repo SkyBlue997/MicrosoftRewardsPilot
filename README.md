@@ -38,8 +38,8 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. 安装依赖
-npm i
+# 2. 安装依赖并下载浏览器内核（需要 Node.js 20 或更高版本）
+npm run pre-build
 
 # 3. 配置文件
 # 复制示例配置文件并编辑
@@ -62,13 +62,10 @@ npm start
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. 构建
-npm run build
+# 2. 构建镜像并启动容器（镜像内会自行安装依赖、下载浏览器内核并编译）
+docker compose up -d --build
 
-# 3. 启动容器
-docker compose up -d
-
-# 4. 查看日志(可选)
+# 3. 查看日志(可选)
 docker logs -f microsoftrewardspilot
 ```
 
@@ -93,7 +90,8 @@ services:
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
-> 地理位置/时区由 `config.json` 的 `searchSettings.multiLanguage.autoDetectLocation` 与 `searchSettings.autoTimezone` 控制（不是环境变量）。
+> - 浏览器的时区始终按出口 IP 自动检测；`TZ` 只决定容器内定时任务按哪个时区计时。
+> - 可选环境变量 `REWARDS_APP_VERSION`：调用积分接口时声明的必应 App 版本号（默认是代码里写入的一个真实版本）。该 App 大约每周更新，隔一段时间可改成较新的版本号。
 
 </details>
 
@@ -105,13 +103,12 @@ services:
 ```json
 {
   "headless": true,           // 无头模式运行
-  "parallel": true,           // 并行执行任务
+  "parallel": false,          // 桌面端与移动端是否并行执行
   "clusters": 1,              // 集群数量
-  "globalTimeout": "45min",   // 全局超时时间
-  "runOnZeroPoints": false,   // 零积分时不运行
+  "globalTimeout": "180min",  // 单个账户一轮运行的总时限
   "accountDelay": {           // 多账户间隔时间
-    "min": "5min",            // 最小间隔5分钟
-    "max": "15min"            // 最大间隔15分钟
+    "min": "8min",            // 最小间隔8分钟
+    "max": "20min"            // 最大间隔20分钟
   }
 }
 ```
@@ -121,7 +118,6 @@ services:
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // 仅影响请求头 X-Rewards-Country/Language
     "multiLanguage": {
       "enabled": true,              // 多语言支持
       "autoDetectLocation": true    // 自动检测位置（决定查询与时区本地化）
@@ -269,7 +265,7 @@ npm run login -- --email you@example.com   # 多账户时指定账户
 <details>
 <summary><strong>时区不匹配</strong></summary>
 
-**解决方案：** 检查 `TZ` 环境变量设置是否正确
+**解决方案：** 浏览器时区按出口 IP 自动检测，无需设置；`TZ` 环境变量只影响容器内定时任务的触发时间，请确认它是你希望的时区
 
 </details>
 
@@ -306,7 +302,7 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **每日任务集 / 每日活动 / 推广任务** - 经 dapi API 自动领取「点击即完成」类活动（urlreward / 阅读赚取 / 签到，含每日一言等 urlreward 卡片）；需作答的互动 Quiz 不会被自动完成
 - **桌面端搜索** - 真实、拟人节奏的必应搜索，进度读自 dapi
 - **移动端搜索** - 移动设备模拟（Level 2 起，与 PC 共享当日搜索上限）
-- **Explore on Bing** - 经奖励 flyout 的类目搜索完成
+- **Explore on Bing** - 在必应的积分面板中点击活动卡片激活，再搜索卡片指定的主题完成
 - **视觉搜索** - 自动完成必应视觉搜索活动
 - **每日签到** - 网页签到 + 必应应用签到（两种独立签到）
 - **阅读赚取** - 阅读文章获取积分
@@ -318,18 +314,20 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **多账户支持** - 集群并行处理
 - **会话存储** - 免重复登录，支持2FA
 - **dapi 后端对接** - 新版 SPA 已无可抓取 DOM，改走 Rewards 后端 API（`prod.rewardsplatform.microsoft.com/dapi`）；`rewards.bing.com` 仅为登录落地页
-- **地理位置检测** - IP 检测地区 / 坐标 / 时区
-- **时区同步** - 自动设置匹配时区
+- **地理位置检测** - 按出口 IP 检测地区与时区
+- **时区同步** - 浏览器时区自动与 IP 所在地一致
 - **本地化** - 按账户市场本地化查询，并发送对应 `X-Rewards-Language`
 - **rebrowser 反检测** - 启用补丁，消除 Playwright 的 `Runtime.enable` CDP 泄漏
-- **指纹一致性** - fingerprint-injector 注入 + UA/Client-Hints(GREASE) 对齐
+- **指纹一致性** - fingerprint-injector 注入；UA、Client Hints（页面内与请求头）、窗口/屏幕尺寸与缩放相互一致
+- **版本真实性** - UA 声称的 Edge 版本不超过实际浏览器内核版本；想让 UA 跟上新版，升级 `rebrowser-playwright` 即可
+- **App 接口身份** - 调用积分接口时使用必应 App 的请求头
+- **协议更新页** - 登录时遇到「微软服务协议更新」页面会自动确认，避免无人值守时卡住
 - **拟人行为** - 逐字打字、可变方向滚动、结果点击与停留
 - **拟人延迟** - 对数正态分布的搜索间隔（无区间硬边界）
 - **节奏随机化** - 账户顺序洗牌、运行启动时间抖动
 - **弹窗智能处理** - 自动检测和关闭各种Microsoft Rewards弹窗
 - **Passkey循环绕过** - 自动处理Passkey设置循环问题
 - **Docker支持** - 容器化部署
-- **自动重试** - 失败任务智能重试
 - **详细日志** - 完整的执行记录
 - **灵活配置** - 丰富的自定义选项
 - **中文本地化** - 中国账户使用 zh-CN 查询库搜索（与日/英/越同为完整本地化语言）
@@ -355,7 +353,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "sessionPath": "sessions",
   "headless": true,
   "parallel": false,
-  "runOnZeroPoints": false,
   "clusters": 1,
   "saveFingerprint": {
     "mobile": true,
@@ -366,14 +363,12 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
     "doMobileSearch": true,
     "doMorePromotions": true
   },
-  "searchOnBingLocalQueries": true,
   "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
   },
   "searchSettings": {
-    "useGeoLocaleQueries": true,
     "multiLanguage": {
       "enabled": true,
       "autoDetectLocation": true
@@ -391,10 +386,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "webhookLogExcludeFunc": [
     "SEARCH-CLOSE-TABS"
   ],
-  "proxy": {
-    "proxyGoogleTrends": true,
-    "proxyBingTerms": true
-  },
   "webhook": {
     "enabled": false,
     "url": ""

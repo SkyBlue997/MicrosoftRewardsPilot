@@ -10,7 +10,7 @@
 **インテリジェント Microsoft Rewards ポイント自動収集ツール**
 
 [![GitHub](https://img.shields.io/badge/GitHub-SkyBlue997-blue?style=flat-square&logo=github)](https://github.com/SkyBlue997/MicrosoftRewardsPilot)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](../LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-対応-blue?style=flat-square&logo=docker)](https://hub.docker.com)
 
 ---
@@ -38,8 +38,8 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. 依存関係のインストール
-npm i
+# 2. 依存関係のインストールとブラウザのダウンロード（Node.js 20 以降が必要）
+npm run pre-build
 
 # 3. 設定ファイル
 # サンプル設定ファイルをコピーして編集
@@ -62,13 +62,10 @@ npm start
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. ビルド
-npm run build
+# 2. イメージをビルドしてコンテナを開始（依存関係のインストール、ブラウザのダウンロード、コンパイルはイメージ内で行われます）
+docker compose up -d --build
 
-# 3. コンテナの開始
-docker compose up -d
-
-# 4. ログの確認（オプション）
+# 3. ログの確認（オプション）
 docker logs -f microsoftrewardspilot
 ```
 
@@ -93,7 +90,8 @@ services:
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
-> 地理的位置／タイムゾーンは `config.json` の `searchSettings.multiLanguage.autoDetectLocation` と `searchSettings.autoTimezone` で制御します（環境変数ではありません）。
+> - ブラウザのタイムゾーンは常に出口 IP から自動検出されます。`TZ` はコンテナ内のスケジュールがどのタイムゾーンで動くかだけを決めます。
+> - 任意の環境変数 `REWARDS_APP_VERSION`：Rewards API を呼ぶ際に名乗る Bing アプリのバージョン（既定値はコードに書かれた実在のリリース）。アプリはほぼ毎週更新されるため、ときどき新しいバージョンに変更してください。
 
 </details>
 
@@ -105,13 +103,12 @@ services:
 ```json
 {
   "headless": true,           // ヘッドレスモードで実行
-  "parallel": true,           // タスクを並列実行
+  "parallel": false,          // デスクトップとモバイルを並列実行するか
   "clusters": 1,              // クラスター数
-  "globalTimeout": "45min",   // グローバルタイムアウト時間
-  "runOnZeroPoints": false,   // ゼロポイント時は実行しない
+  "globalTimeout": "180min",  // 1アカウントの実行全体の制限時間
   "accountDelay": {           // アカウント間の遅延時間
-    "min": "5min",            // 最小間隔5分
-    "max": "15min"            // 最大間隔15分
+    "min": "8min",            // 最小間隔8分
+    "max": "20min"            // 最大間隔20分
   }
 }
 ```
@@ -121,7 +118,6 @@ services:
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // リクエストヘッダー X-Rewards-Country/Language にのみ影響
     "multiLanguage": {
       "enabled": true,              // 多言語サポート
       "autoDetectLocation": true    // 位置自動検出（クエリとタイムゾーンのローカライズを決定）
@@ -269,7 +265,7 @@ npm run login -- --email you@example.com   # 複数アカウント時に指定
 <details>
 <summary><strong>タイムゾーンの不一致</strong></summary>
 
-**解決方法：** `TZ` 環境変数が正しく設定されているかを確認
+**解決方法：** ブラウザのタイムゾーンは出口 IP から自動検出されるため設定不要です。`TZ` 環境変数はコンテナ内のスケジュール実行時刻にのみ影響するので、意図したタイムゾーンになっているか確認してください
 
 </details>
 
@@ -306,7 +302,7 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **デイリータスクセット / 毎日のアクティビティ / プロモーションタスク** - dapi API 経由で「クリックで完了」型アクティビティを自動獲得（urlreward / 読んで稼ぐ / チェックイン、毎日の一言などの urlreward カード含む）。回答が必要なインタラクティブ Quiz は自動完了されません
 - **デスクトップ検索** - 実際の、人間らしいペースの Bing 検索。進捗は dapi から読み取り
 - **モバイル検索** - モバイルデバイスシミュレーション（Level 2 以降、PC と当日の検索上限を共有）
-- **Explore on Bing** - 報酬 flyout からのカテゴリ検索で完了
+- **Explore on Bing** - Bing の Rewards パネルでカードをクリックして有効化し、カードが示すトピックを検索して完了
 - **視覚検索** - Bing 視覚検索アクティビティを自動完了
 - **毎日チェックイン** - ウェブチェックイン ＋ Bing アプリチェックイン（2種類の独立したチェックイン）
 - **読んで稼ぐ** - 記事を読んでポイント獲得
@@ -318,18 +314,20 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **マルチアカウントサポート** - 並列クラスター処理
 - **セッション保存** - 重複ログインなし、2FA対応
 - **dapi バックエンド接続** - 新しい SPA にはスクレイピング可能な DOM がないため、Rewards バックエンド API（`prod.rewardsplatform.microsoft.com/dapi`）を利用。`rewards.bing.com` はログインのランディングページのみ
-- **地理位置検出** - IP で地域 / 座標 / タイムゾーンを検出
-- **タイムゾーン同期** - マッチングタイムゾーンの自動設定
+- **地理位置検出** - 出口 IP から地域とタイムゾーンを検出
+- **タイムゾーン同期** - ブラウザのタイムゾーンは常に IP の所在地と一致
 - **ローカライズ** - アカウントの市場に応じてクエリをローカライズし、対応する `X-Rewards-Language` を送信
 - **rebrowser 反検出** - パッチを有効化し、Playwright の `Runtime.enable` CDP リークを除去
-- **指紋の一貫性** - fingerprint-injector による注入 ＋ UA/Client-Hints(GREASE) の整合
+- **指紋の一貫性** - fingerprint-injector による注入。UA、Client Hints（ページ内とリクエストヘッダー）、ウィンドウ／画面サイズと倍率が互いに一致
+- **バージョンの正直さ** - UA が名乗る Edge のバージョンは実際のブラウザエンジンを超えません。UA を新しくするには `rebrowser-playwright` を更新してください
+- **アプリ API の身元** - Rewards API を Bing アプリのリクエストヘッダーで呼び出し
+- **規約更新ページ** - サインイン時の「Microsoft サービス規約の更新」ページを自動で確認し、無人実行が止まらないようにします
 - **人間らしい行動** - 一文字ずつのタイピング、可変方向のスクロール、結果クリックと滞留
 - **人間らしい遅延** - 対数正規分布の検索間隔（区間の硬い境界なし）
 - **ペースのランダム化** - アカウント順序のシャッフル、実行開始時刻のジッター
 - **ポップアップスマート処理** - Microsoft Rewardsの各種ポップアップを自動検出・閉じる
 - **Passkeyループ回避** - Passkey設定ループ問題を自動処理
 - **Dockerサポート** - コンテナ化デプロイ
-- **自動リトライ** - 失敗タスクのスマートリトライ
 - **詳細ログ** - 完全な実行記録
 - **柔軟な設定** - 豊富なカスタマイズオプション
 - **中国語ローカライズ** - 中国アカウントは組み込みの zh-CN クエリ集から検索（完全ローカライズ言語 ja/en/zh-CN/vi の1つ）
@@ -353,7 +351,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "sessionPath": "sessions",
   "headless": true,
   "parallel": false,
-  "runOnZeroPoints": false,
   "clusters": 1,
   "saveFingerprint": {
     "mobile": true,
@@ -364,14 +361,12 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
     "doMobileSearch": true,
     "doMorePromotions": true
   },
-  "searchOnBingLocalQueries": true,
   "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
   },
   "searchSettings": {
-    "useGeoLocaleQueries": true,
     "multiLanguage": {
       "enabled": true,
       "autoDetectLocation": true
@@ -389,10 +384,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "webhookLogExcludeFunc": [
     "SEARCH-CLOSE-TABS"
   ],
-  "proxy": {
-    "proxyGoogleTrends": true,
-    "proxyBingTerms": true
-  },
   "webhook": {
     "enabled": false,
     "url": ""

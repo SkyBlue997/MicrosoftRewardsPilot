@@ -10,7 +10,7 @@
 **Intelligent Microsoft Rewards Points Auto-Collection Tool**
 
 [![GitHub](https://img.shields.io/badge/GitHub-SkyBlue997-blue?style=flat-square&logo=github)](https://github.com/SkyBlue997/MicrosoftRewardsPilot)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](../LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Supported-blue?style=flat-square&logo=docker)](https://hub.docker.com)
 
 ---
@@ -38,8 +38,8 @@
 git clone https://github.com/SkyBlue997/MicrosoftRewardsPilot
 cd MicrosoftRewardsPilot
 
-# 2. Install Dependencies
-npm i
+# 2. Install dependencies and download the browser (requires Node.js 20 or newer)
+npm run pre-build
 
 # 3. Configuration
 # Copy example configuration files and edit them
@@ -62,13 +62,10 @@ npm start
 cp config/config.json.example config/config.json
 cp config/accounts.json.example config/accounts.json
 
-# 2. Build
-npm run build
+# 2. Build the image and start the container (the image installs dependencies, downloads the browser and compiles by itself)
+docker compose up -d --build
 
-# 3. Start Container
-docker compose up -d
-
-# 4. View Logs (Optional)
+# 3. View Logs (Optional)
 docker logs -f microsoftrewardspilot
 ```
 
@@ -93,7 +90,8 @@ services:
       - REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding
       - REBROWSER_PATCHES_UTILITY_WORLD_NAME=util
 ```
-> Geo-location / timezone are controlled by `searchSettings.multiLanguage.autoDetectLocation` and `searchSettings.autoTimezone` in `config.json` (not environment variables).
+> - The browser's timezone is always detected from the exit IP; `TZ` only decides which timezone the container's schedule runs in.
+> - Optional environment variable `REWARDS_APP_VERSION`: the Bing app version stated when calling the Rewards API (defaults to a real release written in the code). The app ships about weekly, so set a newer version from time to time.
 
 </details>
 
@@ -105,13 +103,12 @@ services:
 ```json
 {
   "headless": true,           // Run in headless mode
-  "parallel": true,           // Execute tasks in parallel
+  "parallel": false,          // Run desktop and mobile in parallel
   "clusters": 1,              // Number of clusters
-  "globalTimeout": "45min",   // Global timeout duration
-  "runOnZeroPoints": false,   // Don't run when zero points available
+  "globalTimeout": "180min",  // Time budget for one account's run
   "accountDelay": {           // Delay between accounts
-    "min": "5min",            // Minimum delay 5 minutes
-    "max": "15min"            // Maximum delay 15 minutes
+    "min": "8min",            // Minimum delay 8 minutes
+    "max": "20min"            // Maximum delay 20 minutes
   }
 }
 ```
@@ -121,7 +118,6 @@ services:
 ```json
 {
   "searchSettings": {
-    "useGeoLocaleQueries": true,    // Only affects the X-Rewards-Country/Language headers
     "multiLanguage": {
       "enabled": true,              // Multi-language support
       "autoDetectLocation": true    // Auto-detect location (drives query & timezone localization)
@@ -269,7 +265,7 @@ npm run login -- --email you@example.com   # pick an account when there are seve
 <details>
 <summary><strong>Timezone Mismatch</strong></summary>
 
-**Solution:** Check if the `TZ` environment variable is set correctly
+**Solution:** The browser's timezone is detected from the exit IP and needs no setting; the `TZ` environment variable only affects when the container's scheduled runs fire, so make sure it is the timezone you want
 
 </details>
 
@@ -306,7 +302,7 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **Daily Task Set / Daily Activities / Promotional Tasks** - "click-to-complete" activities auto-claimed via the dapi API (urlreward / read-to-earn / check-in, including daily-quote-style urlreward cards); interactive quizzes that require answering are NOT auto-completed
 - **Desktop Search** - Real, human-paced Bing searches; progress read from dapi
 - **Mobile Search** - Mobile device simulation (Level 2+, shares the daily search cap with PC)
-- **Explore on Bing** - Completed via category search from the rewards flyout
+- **Explore on Bing** - Activated by clicking the offer's card in Bing's Rewards panel, then completed by searching the topic the card names
 - **Visual Search** - Auto-completes the Bing visual-search activity
 - **Daily Check-in** - Web check-in + Bing-app check-in (two independent check-ins)
 - **Read to Earn** - Earn points by reading articles
@@ -318,18 +314,20 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
 - **Multi-Account Support** - Parallel cluster processing
 - **Session Storage** - No repeated login, 2FA support
 - **dapi Backend Integration** - The new SPA has no scrapable DOM, so the bot uses the Rewards backend API (`prod.rewardsplatform.microsoft.com/dapi`); `rewards.bing.com` is only the login/landing host
-- **Geo-location Detection** - IP-based region / coordinates / timezone detection
-- **Timezone Synchronization** - Auto-set matching timezone
+- **Geo-location Detection** - Region and timezone detected from the exit IP
+- **Timezone Synchronization** - The browser's timezone always matches the IP's location
 - **Localization** - Localizes queries per account market and sends the matching `X-Rewards-Language`
 - **rebrowser Anti-Detection** - Enables the patch that removes Playwright's `Runtime.enable` CDP leak
-- **Fingerprint Consistency** - fingerprint-injector injection + UA/Client-Hints(GREASE) alignment
+- **Fingerprint Consistency** - fingerprint-injector injection; UA, Client Hints (in the page and in request headers), window/screen size and scale all agree with each other
+- **Honest Version** - The Edge version in the UA never exceeds the real browser engine's; to move the UA forward, upgrade `rebrowser-playwright`
+- **App API Identity** - Calls the Rewards API with the Bing app's request headers
+- **Terms Update Page** - Microsoft's "We're updating our terms" page is acknowledged automatically during sign-in, so unattended runs don't stall on it
 - **Human-like Behavior** - Per-character typing, variable-direction scrolling, result clicks and dwell
 - **Human-like Delays** - Log-normal-distributed search spacing (no hard interval boundaries)
 - **Cadence Randomization** - Account-order shuffle, run-start jitter
 - **Popup Smart Handling** - Auto-detect and close various Microsoft Rewards popups
 - **Passkey Loop Bypass** - Auto-handle Passkey setup loop issues
 - **Docker Support** - Containerized deployment
-- **Auto Retry** - Smart retry for failed tasks
 - **Detailed Logging** - Complete execution records
 - **Flexible Configuration** - Rich customization options
 - **Chinese Localization** - China accounts search from a built-in zh-CN query bank (one of the fully-localized languages ja/en/zh-CN/vi)
@@ -353,7 +351,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "sessionPath": "sessions",
   "headless": true,
   "parallel": false,
-  "runOnZeroPoints": false,
   "clusters": 1,
   "saveFingerprint": {
     "mobile": true,
@@ -364,14 +361,12 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
     "doMobileSearch": true,
     "doMorePromotions": true
   },
-  "searchOnBingLocalQueries": true,
   "globalTimeout": "180min",
   "accountDelay": {
     "min": "8min",
     "max": "20min"
   },
   "searchSettings": {
-    "useGeoLocaleQueries": true,
     "multiLanguage": {
       "enabled": true,
       "autoDetectLocation": true
@@ -389,10 +384,6 @@ docker exec microsoftrewardspilot curl -s https://ipapi.co/json
   "webhookLogExcludeFunc": [
     "SEARCH-CLOSE-TABS"
   ],
-  "proxy": {
-    "proxyGoogleTrends": true,
-    "proxyBingTerms": true
-  },
   "webhook": {
     "enabled": false,
     "url": ""
