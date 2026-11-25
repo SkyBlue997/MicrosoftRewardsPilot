@@ -87,7 +87,14 @@ export async function getChromiumVersion(major: string, isMobile: boolean): Prom
 
 const FALLBACK_EDGE_VERSIONS = { android: '131.0.2903.87', windows: '131.0.2903.86' }
 
+// One successful lookup per process (= per run): the saved-UA staleness check, a refresh and the
+// desktop + mobile browsers of the same run would otherwise each hit the endpoint again.
+let edgeVersionsCache: { android: string, windows: string } | null = null
+
 export async function getEdgeVersions(isMobile: boolean) {
+    if (edgeVersionsCache) {
+        return edgeVersionsCache
+    }
     try {
         const response = await axios({
             url: 'https://edgeupdates.microsoft.com/api/products',
@@ -98,10 +105,11 @@ export async function getEdgeVersions(isMobile: boolean) {
         const data: EdgeVersion[] = response.data
         const stable = data.find(x => x.Product == 'Stable')
         if (stable) {
-            return {
+            edgeVersionsCache = {
                 android: stable.Releases.find(x => x.Platform == 'Android')?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.android,
                 windows: stable.Releases.find(x => (x.Platform == 'Windows' && x.Architecture == 'x64'))?.ProductVersion ?? FALLBACK_EDGE_VERSIONS.windows
             }
+            return edgeVersionsCache
         }
     } catch (error) {
         log(isMobile, 'USERAGENT-EDGE-VERSION', `Failed to fetch Edge versions: ${error}`, 'warn')
@@ -230,9 +238,33 @@ export function userAgentRefreshReason(userAgent: string | undefined, isMobile: 
     return null
 }
 
-export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprintWithHeaders, isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {
+/**
+ * Reason when a saved UA's Edge major is behind the current stable Edge, else null. Real Edge
+ * auto-updates roughly every four weeks, so a saved UA frozen on one major for months stands out.
+ * A failed lookup falls back to an old pinned version, which is never newer — so nothing is
+ * refreshed while the version service is unreachable.
+ */
+export async function userAgentStaleReason(userAgent: string | undefined, isMobile: boolean): Promise<string | null> {
+    const saved = edgeMajorFromUserAgent(userAgent)
+    const versions = await getEdgeVersions(isMobile)
+    const current = Number((isMobile ? versions.android : versions.windows).split('.')[0])
+    return current > saved ? `Edge ${saved} is behind current stable ${current}` : null
+}
+
+/**
+ * Rewrites the UA, navigator.userAgentData and sec-ch-ua headers of a fingerprint for the current
+ * Edge version. `keepDevice` carries the existing userAgentData platformVersion/model over, for a
+ * browser *update* on the same device; without it a new device is picked (fresh or malformed data).
+ */
+export async function updateFingerprintUserAgent(fingerprint: BrowserFingerprintWithHeaders, isMobile: boolean, options: { keepDevice?: boolean } = {}): Promise<BrowserFingerprintWithHeaders> {
     try {
         const userAgentData = await getUserAgent(isMobile)
+
+        const previous = fingerprint.fingerprint.navigator.userAgentData as { platformVersion?: string, model?: string } | undefined
+        if (options.keepDevice && previous?.platformVersion) {
+            userAgentData.userAgentMetadata.platformVersion = previous.platformVersion
+            userAgentData.userAgentMetadata.model = previous.model ?? ''
+        }
 
         //@ts-expect-error Errors due it not exactly matching
         fingerprint.fingerprint.navigator.userAgentData = userAgentData.userAgentMetadata
